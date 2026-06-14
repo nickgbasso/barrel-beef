@@ -1,0 +1,103 @@
+<!DOCTYPE html><html lang="en"><head>
+<meta charset="UTF-8"/><meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>BRAND WARS — territory paint</title></head><body>
+<canvas id="cv"></canvas>
+<script src="https://unpkg.com/three@0.134.0/build/three.min.js"></script>
+<script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
+<script src="ranch.js"></script>
+<script>
+"use strict";
+/* BRAND WARS — PvP territory control. Roll around branding the ground your color.
+   Drive over rivals' turf to flip it. Most ground branded when the clock hits 0 wins.
+   Dash to bump a rival and freeze their roller. 2–4 players + bots. */
+const W=1100,D=700, GX=44, GZ=28, CW=W/GX, CD=D/GZ, MATCH=75;
+const PSPD=300, DASH_CD=1.0, DASH_T=0.15, IDLE={u:0,d:0,l:0,r:0,da:0};
+let R3,G=null, gP=[], cells, botT=[], botCd=[], gridClient=null;
+const OWN_HEX=[0x10131f,0x22e3ff,0xff3ea5,0xb6ff3e,0xff9f1c];
+const OWN_COL=OWN_HEX.map(h=>new THREE.Color(h));
+
+function sfx(f,d,t,v){ const a=window.__AC; if(!a)return; const o=a.createOscillator(),g=a.createGain();
+  o.type=t||"square"; o.frequency.setValueAtTime(f,a.currentTime); o.frequency.exponentialRampToValueAtTime(Math.max(50,f*0.5),a.currentTime+d);
+  g.gain.setValueAtTime(v||0.05,a.currentTime); g.gain.exponentialRampToValueAtTime(0.0001,a.currentTime+d); o.connect(g).connect(a.destination); o.start(); o.stop(a.currentTime+d); }
+const K={}; addEventListener("keydown",e=>{ if(["ArrowUp","ArrowDown","ArrowLeft","ArrowRight"," "].includes(e.key))e.preventDefault(); K[e.code]=1; });
+addEventListener("keyup",e=>K[e.code]=0); addEventListener("blur",()=>{for(const k in K)K[k]=0;});
+
+const GAME={
+  id:"brandwars", name:"BRAND WARS", tag:"territory paint duel · 2–4", soloLabel:"SOLO vs BOTS", minStart:2,
+  startLabel:"BRAND IT", lobbyTitle:"THE RANGE", soloTitle:"SOLO BRANDING", lobbySub:"add ranchers or wait for friends",
+  soloSub:"add bot ranchers, then brand", waitText:"waiting for the host to start…", againText:"SPACE = REBRAND",
+  homeHint:'<div class="keys"><div><b>W A S D</b> roll</div><div><b>SHIFT</b> dash-bump</div></div>'+
+           '<div class="hint">Roll across the range and everything under you gets branded YOUR color. Roll over a rival\'s brand to steal it. Dash into a rival to freeze them. Whoever owns the most ground when the '+MATCH+'s clock dies wins the range.</div>',
+
+  init(){ R3=Ranch3D(document.getElementById("cv"),{W,D,bg:0x07090f,hemiTop:0x99aaff,hemiBot:0x0a0d18,dirCol:0xffffff,camH:1000,camZ:580,fov:55});
+    R3.walls(null,0x141b38,0x14304a,0x3aa7ff);
+    cells=new THREE.InstancedMesh(new THREE.BoxGeometry(CW-1.5,1.4,CD-1.5),new THREE.MeshBasicMaterial(),GX*GZ);
+    const mtx=new THREE.Matrix4(); let idx=0; for(let gz=0;gz<GZ;gz++)for(let gx=0;gx<GX;gx++){ mtx.setPosition(gx*CW+CW/2,0.8,gz*CD+CD/2); cells.setMatrixAt(idx,mtx); cells.setColorAt(idx,OWN_COL[0]); idx++; }
+    cells.instanceMatrix.needsUpdate=true; cells.instanceColor.needsUpdate=true; R3.scene.add(cells);
+    for(let i=0;i<4;i++){ const c=COLORS[i].hex; const g=new THREE.Group();
+      const ball=new THREE.Mesh(new THREE.SphereGeometry(17,18,14),new THREE.MeshStandardMaterial({color:c,emissive:c,emissiveIntensity:0.55,roughness:0.3,metalness:0.3})); ball.position.y=17; g.add(ball);
+      const ring=new THREE.Mesh(new THREE.TorusGeometry(20,2.4,8,24),new THREE.MeshBasicMaterial({color:0xffffff})); ring.rotation.x=-Math.PI/2; ring.position.y=2; g.add(ring);
+      g.visible=false; R3.scene.add(g); gP.push(g); }
+    (function idle(){ if(!G||G._idle)R3.idle(); requestAnimationFrame(idle); })();
+  },
+
+  buildState(meta){ G={ph:"play",w:-1,players:[],grid:new Array(GX*GZ).fill(0),time:MATCH,tick:0,_idle:false};
+    const corners=[{x:90,z:90},{x:W-90,z:D-90},{x:W-90,z:90},{x:90,z:D-90}];
+    for(let i=0;i<4;i++){ const a=meta.slots[i]&&(meta.slots[i].kind==="human"||meta.slots[i].kind==="bot");
+      G.players.push({x:corners[i].x,z:corners[i].z,a:0,active:!!a,isBot:meta.slots[i]&&meta.slots[i].kind==="bot",stun:0,dashCd:0,dashT:0}); botT[i]=null; botCd[i]=0; } },
+  rematch(){ G.ph="play"; G.w=-1; G.time=MATCH; G.grid=new Array(GX*GZ).fill(0);
+    const corners=[{x:90,z:90},{x:W-90,z:D-90},{x:W-90,z:90},{x:90,z:D-90}]; for(let i=0;i<4;i++){ const p=G.players[i]; p.x=corners[i].x;p.z=corners[i].z;p.stun=0; } },
+  onStart(){ if(G)G._idle=false; }, snapshotPhase(){ return G?G.ph:"play"; },
+
+  input(){ return {u:K.KeyW||K.ArrowUp?1:0,d:K.KeyS||K.ArrowDown?1:0,l:K.KeyA||K.ArrowLeft?1:0,r:K.KeyD||K.ArrowRight?1:0,da:K.ShiftLeft||K.ShiftRight?1:0}; },
+  botInput(i){ const p=G.players[i]; if(p.stun>0)return IDLE; let t=botT[i]; botCd[i]--;
+    if(!t || botCd[i]<=0 || Math.hypot(t.x-p.x,t.z-p.z)<36){ let pick=null;
+      for(let s=0;s<12;s++){ const gx=(Math.random()*GX)|0, gz=(Math.random()*GZ)|0, o=G.grid[gz*GX+gx];
+        if(o!==i+1){ pick={x:gx*CW+CW/2,z:gz*CD+CD/2}; if(o===0)break; } }
+      if(pick){ t=pick; botT[i]=t; botCd[i]=90+((Math.random()*60)|0); } }
+    if(!t)return IDLE; const dx=t.x-p.x,dz=t.z-p.z; let da=0;
+    for(let j=0;j<4;j++){ if(j===i||!G.players[j].active)continue; if(Math.hypot(G.players[j].x-p.x,G.players[j].z-p.z)<46&&Math.random()<0.04)da=1; }
+    return {u:dz<-6?1:0,d:dz>6?1:0,l:dx<-6?1:0,r:dx>6?1:0,da}; },
+
+  step(dt,inputs){ if(G.ph!=="play")return snap(false);
+    const act=G.players.map((p,i)=>p.active?i:-1).filter(i=>i>=0);
+    for(const i of act){ const p=G.players[i], inp=inputs[i]||IDLE;
+      if(p.stun>0){ p.stun-=dt; continue; }
+      let mx=(inp.r?1:0)-(inp.l?1:0), mz=(inp.d?1:0)-(inp.u?1:0); const ml=Math.hypot(mx,mz)||1; mx/=ml; mz/=ml;
+      const moving=inp.l||inp.r||inp.u||inp.d;
+      let spd=PSPD; if(inp.da&&p.dashCd<=0){p.dashCd=DASH_CD;p.dashT=DASH_T;sfx(320,0.1,"sawtooth",0.04);} if(p.dashCd>0)p.dashCd-=dt;
+      if(p.dashT>0){spd=PSPD*2.2;p.dashT-=dt;}
+      if(moving||p.dashT>0){ p.x+=mx*spd*dt; p.z+=mz*spd*dt; p.a=Math.atan2(mz,mx); }
+      p.x=Math.max(18,Math.min(W-18,p.x)); p.z=Math.max(18,Math.min(D-18,p.z));
+      paint(i,p);
+      if(p.dashT>0){ for(const j of act){ if(j===i)continue; const q=G.players[j]; if(q.stun>0)continue; if(Math.hypot(q.x-p.x,q.z-p.z)<40){ q.stun=0.7; sfx(180,0.12,"square",0.05); } } }
+    }
+    G.time-=dt; if(G.time<=0){ const c=counts(); let mx=-1,w=-1; for(let i=0;i<4;i++) if(G.players[i].active&&c[i+1]>mx){mx=c[i+1];w=i;} G.ph="win"; G.w=w; sfx(660,0.3,"sine",0.08); }
+    G.tick++; return snap(G.tick%5===0); },
+
+  ingest(d){ if(d.grid){ const g=d.grid, arr=new Array(g.length); for(let k=0;k<g.length;k++)arr[k]=g.charCodeAt(k)-48; gridClient=arr; } },
+  interp(a,b,t){ const ps=[]; for(let i=0;i<4;i++){ const pa=a.ps[i],pb=b.ps[i];
+      ps.push(pb.ac?{ac:1,x:pa.x+(pb.x-pa.x)*t,z:pa.z+(pb.z-pa.z)*t,a:pb.a,stun:pb.stun}:{ac:0}); }
+    return {ph:b.ph,w:b.w,ps,time:b.time,counts:b.counts,grid:b.grid}; },
+
+  render(f,info){ const grid=info.isHost?G.grid:gridClient;
+    if(grid){ for(let k=0;k<GX*GZ;k++)cells.setColorAt(k,OWN_COL[grid[k]||0]); cells.instanceColor.needsUpdate=true; }
+    for(let i=0;i<4;i++){ const p=f.ps[i], g=gP[i]; if(!p.ac){ g.visible=false; continue; }
+      g.visible=true; g.position.set(p.x,0,p.z); const blink=p.stun?(Math.floor(performance.now()/80)%2?0.35:1):1;
+      g.children[0].material.opacity=blink; g.children[0].material.transparent=blink<1; g.children[0].rotation.x+=0.12; g.children[0].rotation.z-=0.08; }
+    const c=f.counts||counts(); const tot=GX*GZ; const bar=document.getElementById("topBar"); let h='<span style="color:'+(f.time<=10?"#ff6b6b":"#e8ecff")+'">⏱ '+Math.max(0,Math.ceil(f.time))+'s</span>';
+    for(let i=0;i<4;i++){ if(!f.ps[i].ac)continue; const pct=Math.round((c[i+1]/tot)*100); h+='<span class="scp'+(i===info.myIdx?" me":"")+'" style="color:'+COLORS[i].css+';font-size:18px"><span class="dot" style="background:'+COLORS[i].css+'"></span>'+pct+'%</span>'; }
+    bar.innerHTML=h;
+    document.getElementById("botHud").innerHTML='<div style="background:rgba(8,12,26,.7);border:1px solid #232b52;border-radius:12px;padding:8px 16px;font-weight:800;color:#9fb">roll to brand · SHIFT dashes & freezes rivals 🎨</div>';
+    R3.render(0.016); },
+  endText(f,myIdx){ return f.w===myIdx?"MOST GROUND — YOU WIN!":(COLORS[f.w]?COLORS[f.w].name+" OWNS THE RANGE":"GAME OVER"); },
+};
+function counts(){ const c=[0,0,0,0,0]; for(let k=0;k<G.grid.length;k++)c[G.grid[k]]++; return c; }
+function paint(i,p){ const oi=i+1, rad=2, cgx=Math.floor(p.x/CW), cgz=Math.floor(p.z/CD);
+  for(let gz=cgz-rad;gz<=cgz+rad;gz++)for(let gx=cgx-rad;gx<=cgx+rad;gx++){ if(gx<0||gz<0||gx>=GX||gz>=GZ)continue;
+    const cx=gx*CW+CW/2, cz=gz*CD+CD/2; if((cx-p.x)**2+(cz-p.z)**2<(rad*CW)*(rad*CW)) G.grid[gz*GX+gx]=oi; } }
+function snap(withGrid){ const c=counts(); const s={ ph:G.ph,w:G.w,time:G.time,counts:c,
+  ps:G.players.map(p=>p.active?{ac:1,x:Math.round(p.x),z:Math.round(p.z),a:+p.a.toFixed(2),stun:p.stun>0?1:0}:{ac:0}) };
+  if(withGrid){ let str=""; for(let k=0;k<G.grid.length;k++)str+=String.fromCharCode(48+(G.grid[k]||0)); s.grid=str; } return s; }
+RanchNet.start(GAME);
+</script></body></html>

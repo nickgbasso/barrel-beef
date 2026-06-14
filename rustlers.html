@@ -1,0 +1,144 @@
+<!DOCTYPE html><html lang="en"><head>
+<meta charset="UTF-8"/><meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>RUSTLERS — PvPvE loot run</title></head><body>
+<canvas id="cv"></canvas>
+<script src="https://unpkg.com/three@0.134.0/build/three.min.js"></script>
+<script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
+<script src="ranch.js"></script>
+<script>
+"use strict";
+/* RUSTLERS — PvPvE. Grab loose gold, haul it back to YOUR barn to bank it.
+   A roaming BULL stampedes anyone carrying — get rammed and you drop everything.
+   Dash to bump rivals and make them spill. First to bank the target wins. */
+const W=1200,D=720, CAP=5, TARGET=25, MAXLOOT=14, BR=30;
+const BARN=[{x:30,z:30,w:160,d:120},{x:W-190,z:D-150,w:160,d:120},{x:W-190,z:30,w:160,d:120},{x:30,z:D-150,w:160,d:120}];
+const SPAWN=[{x:120,z:120},{x:W-120,z:D-130},{x:W-120,z:120},{x:120,z:D-130}];
+const OBS=[{x:W/2-28,z:D/2-100,w:56,d:200},{x:W/2-170,z:D/2-22,w:120,d:44},{x:W/2+58,z:D/2-22,w:120,d:44}];
+const PSPD=305, DASH_CD=1.1, DASH_T=0.16, IDLE={u:0,d:0,l:0,r:0,da:0};
+let R3,G=null, gP=[], gCarry=[], lootP=[], beastMesh, beastEye;
+
+function sfx(f,d,t,v){ const a=window.__AC; if(!a)return; const o=a.createOscillator(),g=a.createGain();
+  o.type=t||"square"; o.frequency.setValueAtTime(f,a.currentTime); o.frequency.exponentialRampToValueAtTime(Math.max(50,f*0.5),a.currentTime+d);
+  g.gain.setValueAtTime(v||0.05,a.currentTime); g.gain.exponentialRampToValueAtTime(0.0001,a.currentTime+d); o.connect(g).connect(a.destination); o.start(); o.stop(a.currentTime+d); }
+const K={}; addEventListener("keydown",e=>{ if(["ArrowUp","ArrowDown","ArrowLeft","ArrowRight"," "].includes(e.key))e.preventDefault(); K[e.code]=1; });
+addEventListener("keyup",e=>K[e.code]=0); addEventListener("blur",()=>{for(const k in K)K[k]=0;});
+
+const GAME={
+  id:"rustlers", name:"RUSTLERS", tag:"PvPvE loot run · 2–4", soloLabel:"SOLO vs BOTS", minStart:2,
+  startLabel:"YEEHAW — GO", lobbyTitle:"THE STAKEOUT", soloTitle:"SOLO RUSTLE", lobbySub:"add bandits or wait for friends",
+  soloSub:"add bandit bots, then ride", waitText:"waiting for the boss to start…", againText:"SPACE = RIDE AGAIN",
+  homeHint:'<div class="keys"><div><b>W A S D</b> move</div><div><b>SHIFT</b> dash-bump</div></div>'+
+           '<div class="hint">Scoop loose gold, haul it to YOUR colored barn to bank it (carry up to 5, heavier = slower). The roaming BULL rams anyone holding loot and makes them drop it ALL. Dash into a rival to knock a nugget loose. First to bank '+TARGET+' wins.</div>',
+
+  init(){ R3=Ranch3D(document.getElementById("cv"),{W,D,bg:0x140d06,hemiTop:0xffd9a0,hemiBot:0x1a1008,dirCol:0xfff0d8,camH:1080,camZ:640,fov:55});
+    R3.floorGrid(0x241a0f,0x6e4a1f,0x3a2710); R3.walls(OBS,0x3a2512,0x4a2408,0xd99036);
+    for(let i=0;i<4;i++){ const c=COLORS[i].hex, b=BARN[i];
+      const zone=new THREE.Mesh(new THREE.BoxGeometry(b.w,2,b.d),new THREE.MeshBasicMaterial({color:c,transparent:true,opacity:0.16})); zone.position.set(b.x+b.w/2,2,b.z+b.d/2); R3.scene.add(zone);
+      const house=new THREE.Mesh(new THREE.BoxGeometry(64,46,64),new THREE.MeshStandardMaterial({color:0x5a3a1e,roughness:0.8})); house.position.set(b.x+b.w/2,23,b.z+b.d/2); R3.scene.add(house);
+      const roof=new THREE.Mesh(new THREE.ConeGeometry(52,30,4),new THREE.MeshStandardMaterial({color:c,emissive:c,emissiveIntensity:0.4,roughness:0.5})); roof.rotation.y=Math.PI/4; roof.position.set(b.x+b.w/2,61,b.z+b.d/2); R3.scene.add(roof); }
+    for(let i=0;i<4;i++){ const c=COLORS[i].hex, g=new THREE.Group();
+      const m=new THREE.MeshStandardMaterial({color:c,emissive:c,emissiveIntensity:0.45,roughness:0.4});
+      const body=new THREE.Mesh(new THREE.BoxGeometry(34,18,26),new THREE.MeshStandardMaterial({color:0x2a1c10,roughness:0.6})); body.position.y=12; g.add(body);
+      const rim=new THREE.Mesh(new THREE.BoxGeometry(36,5,28),m); rim.position.y=21; g.add(rim);
+      const nose=new THREE.Mesh(new THREE.BoxGeometry(12,8,8),m); nose.position.set(20,12,0); g.add(nose);
+      const stack=[]; for(let k=0;k<CAP;k++){ const cube=new THREE.Mesh(new THREE.BoxGeometry(9,9,9),new THREE.MeshStandardMaterial({color:0xffd34d,emissive:0xffb000,emissiveIntensity:0.5}));
+        cube.position.set(-4+(k%2)*9-4,26+Math.floor(k/2)*9,0); cube.visible=false; g.add(cube); stack.push(cube); }
+      g.visible=false; R3.scene.add(g); gP.push(g); gCarry.push(stack); }
+    for(let i=0;i<MAXLOOT+10;i++){ const m=new THREE.Mesh(new THREE.OctahedronGeometry(9,0),new THREE.MeshStandardMaterial({color:0xffd34d,emissive:0xffb000,emissiveIntensity:0.6,roughness:0.3,metalness:0.5})); m.visible=false; R3.scene.add(m); lootP.push(m); }
+    beastMesh=new THREE.Group();
+    const bd=new THREE.Mesh(new THREE.BoxGeometry(46,34,64),new THREE.MeshStandardMaterial({color:0x2a221d,roughness:0.7})); bd.position.y=20; beastMesh.add(bd);
+    const hd=new THREE.Mesh(new THREE.BoxGeometry(30,26,26),new THREE.MeshStandardMaterial({color:0x352a22,roughness:0.7})); hd.position.set(0,22,34); beastMesh.add(hd);
+    for(const sx of [-14,14]){ const horn=new THREE.Mesh(new THREE.ConeGeometry(4,20,8),new THREE.MeshStandardMaterial({color:0xe8e2d0})); horn.rotation.x=Math.PI/2.6; horn.position.set(sx,30,40); beastMesh.add(horn); }
+    beastEye=new THREE.Mesh(new THREE.SphereGeometry(4,8,8),new THREE.MeshBasicMaterial({color:0xff2a2a})); beastEye.position.set(8,24,46); beastMesh.add(beastEye);
+    const eye2=new THREE.Mesh(new THREE.SphereGeometry(4,8,8),new THREE.MeshBasicMaterial({color:0xff2a2a})); eye2.position.set(-8,24,46); beastMesh.add(eye2);
+    beastMesh.visible=false; R3.scene.add(beastMesh);
+    (function idle(){ if(!G||G._idle)R3.idle(); requestAnimationFrame(idle); })();
+  },
+
+  buildState(meta){ G={ph:"play",w:-1,players:[],loot:[],lootT:0.5,beast:{x:W/2,z:D/2,vx:60,vz:0,a:0,charge:0,cd:0},_idle:false};
+    for(let i=0;i<4;i++){ const a=meta.slots[i]&&(meta.slots[i].kind==="human"||meta.slots[i].kind==="bot");
+      G.players.push({x:SPAWN[i].x,z:SPAWN[i].z,a:0,active:!!a,isBot:meta.slots[i]&&meta.slots[i].kind==="bot",carry:0,stun:0,score:0,dashCd:0,dashT:0}); }
+    for(let i=0;i<8;i++)spawnLoot(); },
+  rematch(){ G.ph="play"; G.w=-1; for(let i=0;i<4;i++){ const p=G.players[i]; p.x=SPAWN[i].x;p.z=SPAWN[i].z;p.carry=0;p.stun=0;p.score=0; } G.loot=[]; for(let i=0;i<8;i++)spawnLoot(); },
+  onStart(){ if(G)G._idle=false; }, snapshotPhase(){ return G?G.ph:"play"; },
+
+  input(){ return {u:K.KeyW||K.ArrowUp?1:0,d:K.KeyS||K.ArrowDown?1:0,l:K.KeyA||K.ArrowLeft?1:0,r:K.KeyD||K.ArrowRight?1:0,da:K.ShiftLeft||K.ShiftRight?1:0}; },
+  botInput(i){ const p=G.players[i]; if(p.stun>0)return IDLE; const bs=G.beast; const bd=Math.hypot(bs.x-p.x,bs.z-p.z);
+    let gx,gz,da=0;
+    if(bd<200){ gx=p.x-(bs.x-p.x); gz=p.z-(bs.z-p.z); }              // flee bull
+    else if(p.carry>=3 || (p.carry>0 && bd<360)){ const b=BARN[i]; gx=b.x+b.w/2; gz=b.z+b.d/2; } // bank
+    else { let best=null,bdl=1e18; for(const l of G.loot){ const d=(l.x-p.x)**2+(l.z-p.z)**2; if(d<bdl){bdl=d;best=l;} }
+      if(best){gx=best.x;gz=best.z;} else {gx=p.x;gz=p.z;} }
+    const dx=gx-p.x,dz=gz-p.z; if(Math.random()<0.01)da=1;
+    return {u:dz<-6?1:0,d:dz>6?1:0,l:dx<-6?1:0,r:dx>6?1:0,da}; },
+
+  step(dt,inputs){ if(G.ph!=="play")return snap();
+    const act=G.players.map((p,i)=>p.active?i:-1).filter(i=>i>=0);
+    for(const i of act){ const p=G.players[i], inp=inputs[i]||IDLE;
+      if(p.stun>0){ p.stun-=dt; continue; }
+      let mx=(inp.r?1:0)-(inp.l?1:0), mz=(inp.d?1:0)-(inp.u?1:0); const ml=Math.hypot(mx,mz)||1; mx/=ml; mz/=ml;
+      const moving=inp.l||inp.r||inp.u||inp.d;
+      let spd=PSPD*(1-p.carry*0.05); if(inp.da&&p.dashCd<=0){p.dashCd=DASH_CD;p.dashT=DASH_T;sfx(300,0.1,"sawtooth",0.04);} if(p.dashCd>0)p.dashCd-=dt;
+      if(p.dashT>0){spd=PSPD*2.3;p.dashT-=dt;}
+      if(moving||p.dashT>0){ p.x+=mx*spd*dt; p.z+=mz*spd*dt; p.a=Math.atan2(mz,mx); }
+      clampP(p,18);
+      // dash bump steal
+      if(p.dashT>0){ for(const j of act){ if(j===i)continue; const q=G.players[j]; if(q.stun>0)continue;
+        if(Math.hypot(q.x-p.x,q.z-p.z)<40 && q.carry>0){ q.carry--; q.stun=0.5; dropNugget(q.x,q.z); sfx(220,0.12,"square",0.06); } } }
+      // pickup
+      for(let k=G.loot.length-1;k>=0;k--){ const l=G.loot[k]; if(p.carry<CAP && Math.hypot(l.x-p.x,l.z-p.z)<30){ p.carry++; G.loot.splice(k,1); sfx(720+p.carry*40,0.07,"triangle",0.05); } }
+      // bank
+      const b=BARN[i]; if(p.carry>0 && p.x>b.x&&p.x<b.x+b.w&&p.z>b.z&&p.z<b.z+b.d){ p.score+=p.carry; sfx(520,0.16,"sine",0.08); R3.boom(p.x,p.z,COLORS[i].css,40); p.carry=0;
+        if(p.score>=TARGET){ G.ph="win"; G.w=i; } }
+    }
+    // beast
+    const bs=G.beast; if(bs.cd>0)bs.cd-=dt;
+    let tgt=null,td=1e18; for(const i of act){ const p=G.players[i]; if(p.stun>0)continue; const d=(p.x-bs.x)**2+(p.z-bs.z)**2; const w=p.carry>0?0.4:1.0; if(d*w<td&&Math.sqrt(d)<560){td=d*w;tgt=p;} }
+    if(tgt&&bs.cd<=0){ const ang=Math.atan2(tgt.z-bs.z,tgt.x-bs.x); bs.vx+=(Math.cos(ang)*340-bs.vx)*Math.min(1,2.4*dt); bs.vz+=(Math.sin(ang)*340-bs.vz)*Math.min(1,2.4*dt); bs.charge=Math.min(1,bs.charge+dt*2); }
+    else { bs.charge=Math.max(0,bs.charge-dt); bs.wt=(bs.wt||0)-dt; if(bs.wt<=0){ const a=Math.random()*6.28; bs.vx=Math.cos(a)*140; bs.vz=Math.sin(a)*140; bs.wt=1.5+Math.random()*2; } }
+    bs.x+=bs.vx*dt; bs.z+=bs.vz*dt; bs.a=Math.atan2(bs.vz,bs.vx);
+    if(bs.x<BR){bs.x=BR;bs.vx=Math.abs(bs.vx);} if(bs.x>W-BR){bs.x=W-BR;bs.vx=-Math.abs(bs.vx);}
+    if(bs.z<BR){bs.z=BR;bs.vz=Math.abs(bs.vz);} if(bs.z>D-BR){bs.z=D-BR;bs.vz=-Math.abs(bs.vz);}
+    for(const b of OBS){ const cx=Math.max(b.x,Math.min(bs.x,b.x+b.w)),cz=Math.max(b.z,Math.min(bs.z,b.z+b.d)); const dx=bs.x-cx,dz=bs.z-cz,d=Math.hypot(dx,dz);
+      if(d<BR&&d>0){ bs.x=cx+dx/d*BR; bs.z=cz+dz/d*BR; if(Math.abs(dx)>Math.abs(dz))bs.vx*=-1; else bs.vz*=-1; } }
+    for(const i of act){ const p=G.players[i]; if(p.stun>0)continue; if(Math.hypot(p.x-bs.x,p.z-bs.z)<BR+18){
+      p.stun=1.4; sfx(90,0.4,"sawtooth",0.1); R3.boom(p.x,p.z,"#ff6b3a",55);
+      for(let n=0;n<p.carry;n++)dropNugget(p.x,p.z); p.carry=0; bs.cd=1.2; bs.charge=0; const a=Math.atan2(bs.vz,bs.vx); bs.vx=-Math.cos(a)*160; bs.vz=-Math.sin(a)*160; } }
+    // loot spawn
+    G.lootT-=dt; if(G.lootT<=0&&G.loot.length<MAXLOOT){ spawnLoot(); G.lootT=1.6+Math.random()*1.2; }
+    return snap(); },
+
+  ingest(){}, interp(a,b,t){ const ps=[]; for(let i=0;i<4;i++){ const pa=a.ps[i],pb=b.ps[i];
+      ps.push(pb.ac?{ac:1,x:pa.x+(pb.x-pa.x)*t,z:pa.z+(pb.z-pa.z)*t,a:pb.a,carry:pb.carry,stun:pb.stun,score:pb.score}:{ac:0}); }
+    const bs=b.beast,ba=a.beast; return {ph:b.ph,w:b.w,ps,loot:b.loot,beast:{x:ba.x+(bs.x-ba.x)*t,z:ba.z+(bs.z-ba.z)*t,a:bs.a,charge:bs.charge}}; },
+
+  render(f,info){
+    for(let i=0;i<4;i++){ const p=f.ps[i], g=gP[i]; if(!p.ac){ g.visible=false; continue; }
+      g.visible=true; g.position.set(p.x,0,p.z); g.rotation.y=-p.a;
+      const blink=p.stun?(Math.floor(performance.now()/90)%2?0.3:1):1; g.traverse(o=>{ if(o.material&&o.material.opacity!==undefined){ o.material.transparent=blink<1; o.material.opacity=blink; } });
+      for(let k=0;k<CAP;k++)gCarry[i][k].visible=(k<p.carry); }
+    let li=0; for(const l of f.loot){ if(li>=lootP.length)break; const m=lootP[li++]; m.visible=true; m.position.set(l.x,12+Math.sin(performance.now()/300+l.x)*3,l.z); m.rotation.y+=0.05; }
+    for(;li<lootP.length;li++)lootP[li].visible=false;
+    const bs=f.beast; beastMesh.visible=true; beastMesh.position.set(bs.x,0,bs.z); beastMesh.rotation.y=-bs.a+Math.PI/2;
+    const ec=bs.charge>0.4?0xff0000:0xff6a2a; beastEye.material.color.setHex(ec);
+    // HUD
+    const bar=document.getElementById("topBar"); let h="";
+    for(let i=0;i<4;i++){ const p=f.ps[i]; if(!p.ac)continue; h+='<span class="scp'+(i===info.myIdx?" me":"")+'" style="color:'+COLORS[i].css+'"><span class="dot" style="background:'+COLORS[i].css+'"></span>'+p.score+'</span>'; }
+    h+='<span style="color:#8a93b8;font-size:12px">bank '+TARGET+'</span>'; bar.innerHTML=h;
+    const me=f.ps[info.myIdx]; document.getElementById("botHud").innerHTML='<div style="background:rgba(8,12,26,.7);border:1px solid #232b52;border-radius:12px;padding:8px 16px;font-weight:800;color:#ffd34d">CARRYING '+(me&&me.ac?me.carry:0)+'/'+CAP+' 🪙 · get it to your barn — mind the bull 🐂</div>';
+    R3.render(0.016); },
+  endText(f,myIdx){ return f.w===myIdx?"YOU'RE RICH — YOU WIN!":(COLORS[f.w]?COLORS[f.w].name+" CLEANED UP":"GAME OVER"); },
+};
+function snap(){ const bs=G.beast; return { ph:G.ph,w:G.w,
+  ps:G.players.map(p=>p.active?{ac:1,x:Math.round(p.x),z:Math.round(p.z),a:+p.a.toFixed(2),carry:p.carry,stun:p.stun>0?1:0,score:p.score}:{ac:0}),
+  loot:G.loot.map(l=>({x:Math.round(l.x),z:Math.round(l.z)})), beast:{x:Math.round(bs.x),z:Math.round(bs.z),a:+bs.a.toFixed(2),charge:+bs.charge.toFixed(2)} }; }
+function spawnLoot(){ for(let t=0;t<24;t++){ const x=70+Math.random()*(W-140), z=70+Math.random()*(D-140); let ok=true;
+  for(const o of OBS) if(x>o.x-16&&x<o.x+o.w+16&&z>o.z-16&&z<o.z+o.d+16)ok=false;
+  for(const b of BARN) if(x>b.x-10&&x<b.x+b.w+10&&z>b.z-10&&z<b.z+b.d+10)ok=false;
+  if(ok){ G.loot.push({x,z}); return; } } }
+function dropNugget(x,z){ if(G.loot.length<MAXLOOT+8)G.loot.push({x:x+(Math.random()-0.5)*50,z:z+(Math.random()-0.5)*50}); }
+function clampP(p,r){ p.x=Math.max(r,Math.min(W-r,p.x)); p.z=Math.max(r,Math.min(D-r,p.z));
+  for(const b of OBS){ const cx=Math.max(b.x,Math.min(p.x,b.x+b.w)),cz=Math.max(b.z,Math.min(p.z,b.z+b.d)); const dx=p.x-cx,dz=p.z-cz,d=Math.hypot(dx,dz);
+    if(d<r&&d>0){ p.x=cx+dx/d*r; p.z=cz+dz/d*r; } } }
+RanchNet.start(GAME);
+</script></body></html>

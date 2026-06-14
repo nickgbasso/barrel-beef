@@ -1,0 +1,137 @@
+<!DOCTYPE html><html lang="en"><head>
+<meta charset="UTF-8"/><meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>RANCH RUSH — co-op cattle herding</title></head><body>
+<canvas id="cv"></canvas>
+<script src="https://unpkg.com/three@0.134.0/build/three.min.js"></script>
+<script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
+<script src="ranch.js"></script>
+<script>
+"use strict";
+/* RANCH RUSH — co-op herding. Spook skittish cattle (boids) into the pen before
+   the clock runs out. Pure crowd-AI herding, no weapons. 1–4 players + bots. */
+const W=1100,D=700;
+const PEN={x:W/2-110,z:34,w:220,d:130}, PC={x:PEN.x+PEN.w/2,z:PEN.z+PEN.d/2};
+const OBS=[{x:W/2-200,z:D-150,w:130,d:84},{x:130,z:300,w:60,d:60},{x:W-200,z:330,w:60,d:60}];
+const PSPD=300, DASH_CD=1.1, DASH_T=0.16, BARK_CD=2.2, BARK_R=150;
+const FLEE_R=155, SEP_R=36, CMAX=235;
+const IDLE={u:0,d:0,l:0,r:0,da:0,bk:0};
+let R3,G=null, gP=[], cP=[], penMesh, penEdge;
+
+function sfx(f,d,t,v){ const a=window.__AC; if(!a)return; const o=a.createOscillator(),g=a.createGain();
+  o.type=t||"square"; o.frequency.setValueAtTime(f,a.currentTime); o.frequency.exponentialRampToValueAtTime(Math.max(50,f*0.5),a.currentTime+d);
+  g.gain.setValueAtTime(v||0.05,a.currentTime); g.gain.exponentialRampToValueAtTime(0.0001,a.currentTime+d); o.connect(g).connect(a.destination); o.start(); o.stop(a.currentTime+d); }
+
+/* input */
+const K={}; addEventListener("keydown",e=>{ if(["ArrowUp","ArrowDown","ArrowLeft","ArrowRight"," "].includes(e.key))e.preventDefault(); K[e.code]=1; });
+addEventListener("keyup",e=>K[e.code]=0); addEventListener("blur",()=>{for(const k in K)K[k]=0;});
+
+const GAME={
+  id:"ranchrush", name:"RANCH RUSH", tag:"co-op cattle herding · 1–4",
+  soloLabel:"SOLO HERD", minStart:1, startLabel:"OPEN THE GATE", lobbyTitle:"THE CORRAL", soloTitle:"SOLO HERD",
+  lobbySub:"add ranch hands or wait for friends", soloSub:"add bot hands, then herd", waitText:"waiting for the rancher to start…",
+  againText:"SPACE = HERD AGAIN",
+  homeHint:'<div class="keys"><div><b>W A S D</b> move</div><div><b>SHIFT</b> sprint</div><div><b>SPACE</b> BARK (scare)</div></div>'+
+           '<div class="hint">You\'re a ranch hand. Cattle flee from you — use that to push the whole skittish herd into the glowing pen before the timer dies. BARK to scare a cluster hard. Co-op: pen them all to advance rounds. Endless; how far can you herd?</div>',
+
+  init(){ R3=Ranch3D(document.getElementById("cv"),{W,D,bg:0x0a1a0e,hemiTop:0xbfeacb,hemiBot:0x09140c,dirCol:0xfff4d8,camH:1040,camZ:600,fov:55});
+    R3.floorGrid(0x16331d,0x2f6b3a,0x1d4327); R3.walls(OBS,0x3a2512,0x4a2408,0xd99036);
+    for(let i=0;i<4;i++){ const c=COLORS[i].hex; const g=new THREE.Group();
+      const m=new THREE.MeshStandardMaterial({color:c,emissive:c,emissiveIntensity:0.5,roughness:0.4});
+      const base=new THREE.Mesh(new THREE.CylinderGeometry(16,16,9,20),m); base.position.y=6; g.add(base);
+      const dome=new THREE.Mesh(new THREE.SphereGeometry(11,14,10),new THREE.MeshStandardMaterial({color:0x10241a,roughness:0.6})); dome.position.y=12; g.add(dome);
+      const nose=new THREE.Mesh(new THREE.ConeGeometry(5,16,12),m); nose.rotation.z=-Math.PI/2; nose.position.set(16,8,0); g.add(nose);
+      g.visible=false; R3.scene.add(g); gP.push(g); }
+    for(let i=0;i<90;i++){ const g=new THREE.Group();
+      const body=new THREE.Mesh(new THREE.BoxGeometry(20,14,28),new THREE.MeshStandardMaterial({color:0xf2efe6,roughness:0.7})); body.position.y=10; g.add(body);
+      const head=new THREE.Mesh(new THREE.BoxGeometry(11,11,12),new THREE.MeshStandardMaterial({color:0x6b4a2c,roughness:0.7})); head.position.set(16,9,0); g.add(head);
+      const spot=new THREE.Mesh(new THREE.BoxGeometry(9,2,10),new THREE.MeshStandardMaterial({color:0x2a2620})); spot.position.set(-2,17,3); g.add(spot);
+      g.visible=false; R3.scene.add(g); cP.push(g); }
+    penMesh=new THREE.Mesh(new THREE.BoxGeometry(PEN.w,2,PEN.d),new THREE.MeshBasicMaterial({color:0x36d86a,transparent:true,opacity:0.18}));
+    penMesh.position.set(PC.x,2,PC.z); R3.scene.add(penMesh);
+    penEdge=new THREE.Mesh(new THREE.TorusGeometry(1,1,4,4),new THREE.MeshBasicMaterial({color:0x36d86a})); R3.scene.add(penEdge); penEdge.visible=false;
+    const ed=new THREE.LineSegments(new THREE.EdgesGeometry(new THREE.BoxGeometry(PEN.w,70,PEN.d)),new THREE.LineBasicMaterial({color:0x52ff8a,transparent:true,opacity:0.6}));
+    ed.position.set(PC.x,35,PC.z); R3.scene.add(ed);
+    (function idle(){ if(!G||G._idle)R3.idle(); requestAnimationFrame(idle); })();
+  },
+
+  buildState(meta){ G={ph:"play",round:1,score:0,tleft:0,crit:[],players:[],pennedRound:0,_idle:false};
+    for(let i=0;i<4;i++){ const a=meta.slots[i]&&(meta.slots[i].kind==="human"||meta.slots[i].kind==="bot");
+      G.players.push({x:120+i*40,z:D-90,a:0,active:!!a,isBot:meta.slots[i]&&meta.slots[i].kind==="bot",barkCd:0,bark:0,dashCd:0,dashT:0,stun:0}); }
+    startRound(); },
+  rematch(){ G.round=1; G.score=0; G.ph="play"; for(const p of G.players){p.x=120;p.z=D-90;} startRound(); },
+  onStart(){ if(G)G._idle=false; },
+  snapshotPhase(){ return G?G.ph:"play"; },
+
+  input(){ return {u:K.KeyW||K.ArrowUp?1:0,d:K.KeyS||K.ArrowDown?1:0,l:K.KeyA||K.ArrowLeft?1:0,r:K.KeyD||K.ArrowRight?1:0,
+    da:K.ShiftLeft||K.ShiftRight?1:0,bk:K.Space?1:0}; },
+  botInput(i){ const p=G.players[i]; if(!G.crit.length)return IDLE;
+    let tgt=null,bd=-1; for(const c of G.crit){ const d=(c.x-PC.x)**2+(c.z-PC.z)**2; if(d>bd){bd=d;tgt=c;} }
+    const ang=Math.atan2(tgt.z-PC.z,tgt.x-PC.x), gx=tgt.x+Math.cos(ang)*82, gz=tgt.z+Math.sin(ang)*82;
+    const dx=gx-p.x,dz=gz-p.z; const inp={u:dz<-6?1:0,d:dz>6?1:0,l:dx<-6?1:0,r:dx>6?1:0,da:Math.random()<0.005?1:0,
+      bk:(Math.hypot(p.x-tgt.x,p.z-tgt.z)<120&&p.barkCd<=0&&Math.random()<0.03)?1:0}; return inp; },
+
+  step(dt,inputs){ if(G.ph!=="play")return snap();
+    const act=G.players.map((p,i)=>p.active?i:-1).filter(i=>i>=0);
+    for(const i of act){ const p=G.players[i], inp=inputs[i]||IDLE;
+      let mx=(inp.r?1:0)-(inp.l?1:0), mz=(inp.d?1:0)-(inp.u?1:0); const ml=Math.hypot(mx,mz)||1; mx/=ml; mz/=ml;
+      const moving=inp.l||inp.r||inp.u||inp.d;
+      let spd=PSPD; if(inp.da&&p.dashCd<=0){p.dashCd=DASH_CD;p.dashT=DASH_T;} if(p.dashCd>0)p.dashCd-=dt;
+      if(p.dashT>0){spd*=2.3;p.dashT-=dt;}
+      if(moving||p.dashT>0){ p.x+=mx*spd*dt; p.z+=mz*spd*dt; p.a=Math.atan2(mz,mx); }
+      clampP(p,16);
+      if(p.barkCd>0)p.barkCd-=dt; if(p.bark>0)p.bark-=dt;
+      if(inp.bk&&p.barkCd<=0){ p.barkCd=BARK_CD; p.bark=0.25; sfx(180,0.18,"square",0.06);
+        for(const c of G.crit){ const dx=c.x-p.x,dz=c.z-p.z,d=Math.hypot(dx,dz)||1; if(d<BARK_R){ const f=1-d/BARK_R; c.vx+=(dx/d)*560*f; c.vz+=(dz/d)*560*f; } } }
+    }
+    for(const c of G.crit){ let ax=0,az=0;
+      for(const i of act){ const p=G.players[i]; const dx=c.x-p.x,dz=c.z-p.z,d=Math.hypot(dx,dz)||1;
+        if(d<FLEE_R){ const f=1-d/FLEE_R; ax+=(dx/d)*f*950; az+=(dz/d)*f*950; } }
+      for(const o of G.crit){ if(o===c)continue; const dx=c.x-o.x,dz=c.z-o.z,d=Math.hypot(dx,dz)||1; if(d<SEP_R){ const f=1-d/SEP_R; ax+=(dx/d)*f*260; az+=(dz/d)*f*260; } }
+      c.wt-=dt; if(c.wt<=0){ c.wa=Math.random()*6.28; c.wt=0.5+Math.random(); } ax+=Math.cos(c.wa)*45; az+=Math.sin(c.wa)*45;
+      const M=58; if(c.x<M)ax+=(M-c.x)*5; if(c.x>W-M)ax-=(c.x-(W-M))*5; if(c.z<M)az+=(M-c.z)*5; if(c.z>D-M)az-=(c.z-(D-M))*5;
+      c.vx+=ax*dt; c.vz+=az*dt; c.vx*=0.9; c.vz*=0.9;
+      const sp=Math.hypot(c.vx,c.vz); if(sp>CMAX){ c.vx=c.vx/sp*CMAX; c.vz=c.vz/sp*CMAX; }
+      c.x+=c.vx*dt; c.z+=c.vz*dt; if(sp>8)c.a=Math.atan2(c.vz,c.vx); clampC(c,12);
+      if(c.x>PEN.x&&c.x<PEN.x+PEN.w&&c.z>PEN.z&&c.z<PEN.z+PEN.d){ c.pen+=dt; if(c.pen>0.4)c.dead=true; } else c.pen=Math.max(0,c.pen-dt*2);
+    }
+    for(let k=G.crit.length-1;k>=0;k--){ if(G.crit[k].dead){ R3.boom(G.crit[k].x,G.crit[k].z,"#52ff8a",30); G.crit.splice(k,1); G.score++; G.pennedRound++; sfx(660,0.1,"triangle",0.06); } }
+    if(G.crit.length===0){ G.score+=Math.max(0,Math.ceil(G.tleft)); G.round++; sfx(880,0.18,"sine",0.08); RanchNet.toast("ROUND "+G.round+"!"); startRound(); }
+    G.tleft-=dt; if(G.tleft<=0&&G.crit.length>0){ G.ph="over"; sfx(110,0.5,"sawtooth",0.1); }
+    return snap(); },
+
+  ingest(){}, interp(a,b,t){ const ps=[]; for(let i=0;i<4;i++){ const pa=a.ps[i],pb=b.ps[i];
+      ps.push(pb.ac?{ac:1,x:pa.x+(pb.x-pa.x)*t,z:pa.z+(pb.z-pa.z)*t,a:pb.a,bk:pb.bk}:{ac:0}); }
+    return {ph:b.ph,ps,cr:b.cr,round:b.round,tleft:b.tleft,score:b.score,left:b.left}; },
+
+  render(f,info){ const dt=RanchNet.fnGet?0.016:0.016;
+    for(let i=0;i<4;i++){ const p=f.ps[i], g=gP[i]; if(!p.ac){ g.visible=false; continue; }
+      g.visible=true; g.position.set(p.x,0,p.z); g.rotation.y=-p.a;
+      g.scale.setScalar(p.bk?1.25:1); }
+    let ci=0; for(const c of f.cr){ if(ci>=cP.length)break; const g=cP[ci++]; g.visible=true; g.position.set(c.x,0,c.z); g.rotation.y=-c.a; }
+    for(;ci<cP.length;ci++)cP[ci].visible=false;
+    const pulse=0.13+Math.abs(Math.sin(performance.now()/500))*0.12; penMesh.material.opacity=pulse;
+    // HUD
+    const bar=document.getElementById("topBar");
+    bar.innerHTML='<span style="color:#52ff8a">ROUND '+f.round+'</span>'+
+      '<span style="color:'+(f.tleft<=8?"#ff6b6b":"#e8ecff")+'">⏱ '+Math.max(0,f.tleft)+'s</span>'+
+      '<span style="color:#ffd166">🐄 '+f.left+' loose</span>'+
+      '<span style="color:#22e3ff">PENNED '+f.score+'</span>';
+    document.getElementById("botHud").innerHTML='<div style="background:rgba(8,12,26,.7);border:1px solid #232b52;border-radius:12px;padding:8px 16px;font-weight:800;color:#9fb">SPACE = BARK 🗣️ · herd the herd into the green pen</div>';
+    R3.render(dt); },
+  endText(f){ return "TIME! PENNED "+f.score+" — REACHED ROUND "+f.round; },
+};
+function snap(){ return { ph:G.ph, ps:G.players.map(p=>p.active?{ac:1,x:Math.round(p.x),z:Math.round(p.z),a:+p.a.toFixed(2),bk:p.bark>0?1:0}:{ac:0}),
+  cr:G.crit.map(c=>({x:Math.round(c.x),z:Math.round(c.z),a:+c.a.toFixed(2)})), round:G.round, tleft:Math.max(0,Math.ceil(G.tleft)), score:G.score, left:G.crit.length }; }
+function startRound(){ const n=4+G.round*3; G.crit=[]; G.tleft=40+G.round*6; G.pennedRound=0;
+  for(let i=0;i<n;i++){ let x,z,ok=false,tries=0;
+    do{ x=80+Math.random()*(W-160); z=200+Math.random()*(D-260); ok=!(x>PEN.x-40&&x<PEN.x+PEN.w+40&&z<PEN.z+PEN.d+60);
+        for(const o of OBS) if(x>o.x-20&&x<o.x+o.w+20&&z>o.z-20&&z<o.z+o.d+20)ok=false; tries++; }while(!ok&&tries<20);
+    G.crit.push({x,z,vx:0,vz:0,a:0,wa:Math.random()*6.28,wt:Math.random(),pen:0,dead:false}); } }
+function clampP(p,r){ p.x=Math.max(r,Math.min(W-r,p.x)); p.z=Math.max(r,Math.min(D-r,p.z));
+  for(const b of OBS){ const cx=Math.max(b.x,Math.min(p.x,b.x+b.w)),cz=Math.max(b.z,Math.min(p.z,b.z+b.d)); const dx=p.x-cx,dz=p.z-cz,d=Math.hypot(dx,dz);
+    if(d<r&&d>0){ p.x=cx+dx/d*r; p.z=cz+dz/d*r; } } }
+function clampC(c,r){ c.x=Math.max(r,Math.min(W-r,c.x)); c.z=Math.max(r,Math.min(D-r,c.z));
+  for(const b of OBS){ const cx=Math.max(b.x,Math.min(c.x,b.x+b.w)),cz=Math.max(b.z,Math.min(c.z,b.z+b.d)); const dx=c.x-cx,dz=c.z-cz,d=Math.hypot(dx,dz);
+    if(d<r&&d>0){ c.x=cx+dx/d*r; c.z=cz+dz/d*r; c.vx*=0.5; c.vz*=0.5; } } }
+RanchNet.start(GAME);
+</script></body></html>
