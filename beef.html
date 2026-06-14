@@ -102,7 +102,7 @@
       <div><b>W A S D</b> move</div><div><b>MOUSE</b> aim</div>
       <div><b>CLICK</b>/<b>SPACE</b> fire</div><div><b>SHIFT</b> dash</div>
     </div>
-    <div class="hint">Hover-tank free-for-all. Grab pickups for 8 weapons + 4 powers in a neon grid arena. Random events warp the rules. Shots ricochet — your own rounds can frag you too. First to 15 frags wins.</div>
+    <div class="hint">Hover-tank free-for-all. Grab pickups for 8 weapons + 4 powers; random events warp the rules; shots ricochet — your own rounds can frag you too. First to 15 frags wins, then it rotates to the next of four arenas (Crossfire, Pillars, Gauntlet, Colosseum).</div>
   </div>
 
   <div class="panel hidden" id="screenLobby">
@@ -157,13 +157,13 @@ const MAX_BULLETS=24, MAX_SLOTS=4;
 const COLORS=[{hex:0x22e3ff,css:"#22e3ff",name:"CYAN"},{hex:0xff3ea5,css:"#ff3ea5",name:"MAGENTA"},
               {hex:0xb6ff3e,css:"#b6ff3e",name:"LIME"},{hex:0xff9f1c,css:"#ff9f1c",name:"ORANGE"}];
 
-const OBS=[
-  {x:W/2-18,z:140,w:36,d:D-280},
-  {x:230,z:D/2-18,w:200,d:36},
-  {x:W-430,z:D/2-18,w:200,d:36},
-  {x:W/2-160,z:D/2-150,w:60,d:60},
-  {x:W/2+100,z:D/2+90,w:60,d:60},
+const MAPS=[
+  {name:"CROSSFIRE", obs:[{x:W/2-18,z:140,w:36,d:D-280},{x:230,z:D/2-18,w:200,d:36},{x:W-430,z:D/2-18,w:200,d:36},{x:W/2-160,z:D/2-150,w:60,d:60},{x:W/2+100,z:D/2+90,w:60,d:60}]},
+  {name:"PILLARS",   obs:[{x:300,z:160,w:54,d:54},{x:W-354,z:160,w:54,d:54},{x:300,z:D-214,w:54,d:54},{x:W-354,z:D-214,w:54,d:54},{x:W/2-27,z:D/2-27,w:54,d:54}]},
+  {name:"GAUNTLET",  obs:[{x:W/2-18,z:60,w:36,d:210},{x:W/2-18,z:D-270,w:36,d:210},{x:200,z:D/2-18,w:240,d:36},{x:W-440,z:D/2-18,w:240,d:36}]},
+  {name:"COLOSSEUM", obs:[{x:W/2-210,z:D/2-160,w:36,d:320},{x:W/2+174,z:D/2-160,w:36,d:320},{x:W/2-210,z:D/2-160,w:420,d:36},{x:W/2-210,z:D/2+124,w:420,d:36}]},
 ];
+let OBS=MAPS[0].obs, mapIndex=0, curMap=-1;
 const SPAWNS=[{x:120,z:120},{x:W-120,z:D-120},{x:W-120,z:120},{x:120,z:D-120}];
 
 /* ---------- weapon + pickup registry ---------- */
@@ -199,7 +199,7 @@ function eventMods(id){ switch(id){
 /* ===========================================================================
    THREE.JS SCENE
    =========================================================================== */
-let renderer,scene,camera,raycaster,groundPlane,camBase;
+let renderer,scene,camera,raycaster,groundPlane,camBase,obsGroup=null;
 let pMesh=[], shadowMesh=[], shieldMesh=[];
 let bulletPool=[], beamPool=[], pickPool=[], partPool=[];
 let arenaReady=false;
@@ -241,7 +241,7 @@ function init3D(){
     e.position.copy(m.position); scene.add(e); }
   const t=24;
   box(-t,-t,W+2*t,t,60); box(-t,D,W+2*t,t,60); box(-t,0,t,D,60); box(W,0,t,D,60);
-  for(const o of OBS) box(o.x,o.z,o.w,o.d,60);
+  obsGroup=new THREE.Group(); scene.add(obsGroup); rebuildObs();
 
   // players
   for(let i=0;i<MAX_SLOTS;i++){
@@ -283,6 +283,10 @@ function init3D(){
   (function idle(){ if(!gameRunning){ camera.position.x=W/2+Math.sin(performance.now()/4000)*120;
     camera.lookAt(W/2,0,D/2); renderer.render(scene,camera); } requestAnimationFrame(idle); })();
 }
+function rebuildObs(){ if(!obsGroup)return; while(obsGroup.children.length)obsGroup.remove(obsGroup.children[0]);
+  const wm=new THREE.MeshStandardMaterial({color:0x141b38,roughness:0.7,metalness:0.2,emissive:0x14304a,emissiveIntensity:0.35});
+  for(const o of OBS){ const m=new THREE.Mesh(new THREE.BoxGeometry(o.w,60,o.d),wm); m.position.set(o.x+o.w/2,30,o.z+o.d/2); obsGroup.add(m);
+    const e=new THREE.LineSegments(new THREE.EdgesGeometry(m.geometry),new THREE.LineBasicMaterial({color:0x3aa7ff,transparent:true,opacity:0.5})); e.position.copy(m.position); obsGroup.add(e); } }
 function updateGroundPt(){
   const ndc=new THREE.Vector2((mouseScreen.x/innerWidth)*2-1, -(mouseScreen.y/innerHeight)*2+1);
   raycaster.setFromCamera(ndc,camera);
@@ -392,7 +396,8 @@ function onDisconnect(){ if(!connected&&!gameRunning)return; connected=false; ga
    =========================================================================== */
 let G=null;
 function buildGameFromSlots(){
-  G={ phase:"play", winner:-1, scores:[0,0,0,0],
+  OBS=MAPS[mapIndex%MAPS.length].obs;
+  G={ phase:"play", winner:-1, scores:[0,0,0,0], mapIndex:mapIndex,
     players:[mkPlayer(0),mkPlayer(1),mkPlayer(2),mkPlayer(3)],
     bullets:[], beams:[], powerups:[], fireCd:[0,0,0,0], dashCd:[0,0,0,0],
     inputs:[null,null,null,null], pkSpawnT:1.5, event:null, eventT:0, eventCd:14, rngSeed:99173 };
@@ -574,7 +579,7 @@ function serializeState(){ return { t:"state",
   bs:G.bullets.map(b=>({x:Math.round(b.x),z:Math.round(b.z),o:b.owner,k:b.kind,r:Math.round(b.r),ar:(b.kind==="mine"&&b.arm>0)?1:0})),
   bm:G.beams.map(b=>({x1:Math.round(b.x1),z1:Math.round(b.z1),x2:Math.round(b.x2),z2:Math.round(b.z2),o:b.owner,rl:b.rail?1:0,a:+(b.life/b.max).toFixed(2)})),
   pk:G.powerups.map(p=>({x:Math.round(p.x),z:Math.round(p.z),i:PK_IDS.indexOf(p.id)})),
-  ev:G.event||"", sc:G.scores.slice(), ph:G.phase, w:G.winner }; }
+  ev:G.event||"", mp:G.mapIndex, sc:G.scores.slice(), ph:G.phase, w:G.winner }; }
 const snap={prev:null,cur:null};
 function ingestState(s){ s.rt=performance.now(); snap.prev=snap.cur; snap.cur=s;
   if(G){ G.scores=s.sc; G.phase=s.ph; G.winner=s.w; } }
@@ -583,7 +588,7 @@ function interpFrame(){ const a=snap.prev,b=snap.cur; if(!b)return null; if(!a)r
   const ps=[]; for(let i=0;i<MAX_SLOTS;i++){ const pa=a.ps[i],pb=b.ps[i];
     ps.push({ac:pb.ac,bt:pb.bt,x:pa.x+(pb.x-pa.x)*t,z:pa.z+(pb.z-pa.z)*t,a:lerpAngle(pa.a,pb.a,t),
       al:pb.al,iv:pb.iv,w:pb.w,am:pb.am,sh:pb.sh,gh:pb.gh,vi:pb.vi,sp:pb.sp}); }
-  return {ps,bs:b.bs,bm:b.bm,pk:b.pk,ev:b.ev,sc:b.sc,ph:b.ph,w:b.w}; }
+  return {ps,bs:b.bs,bm:b.bm,pk:b.pk,ev:b.ev,mp:b.mp,sc:b.sc,ph:b.ph,w:b.w}; }
 function lerpAngle(a,b,t){ return a+angDiff(b,a)*t; }
 
 /* ===========================================================================
@@ -628,6 +633,7 @@ function shieldBreakAt(x,z){ const col=new THREE.Color("#48cae4"); for(let i=0;i
 
 function render3D(frame){
   if(!arenaReady)return;
+  if(frame.mp!==undefined && frame.mp!==curMap){ OBS=MAPS[frame.mp%MAPS.length].obs; rebuildObs(); curMap=frame.mp; }
   // players
   const er=PR*(frame.ev==="giants"?1.6:1)/PR; // scale factor
   for(let i=0;i<MAX_SLOTS;i++){ const p=frame.ps[i], g=pMesh[i], sh=shadowMesh[i], ring=shieldMesh[i];
@@ -686,8 +692,9 @@ function loop(ts){ if(!gameRunning)return; const dt=Math.min(0.05,(ts-last)/1000
     if(G&&G.phase==="win"&&shootHeld){ sendToHost({t:"rematchReq"}); shootHeld=false; } }
   document.getElementById("ping").textContent=(online?(pingMs?("ping "+pingMs+"ms"):"online"):"local")+(isHost?" · host":" · guest");
   requestAnimationFrame(loop); }
-function doRematch(){ if(!isHost)return; G.scores=[0,0,0,0]; G.phase="play"; G.winner=-1; resetRound();
-  G.event=null; G.eventCd=14; showToast("REMATCH!"); }
+function doRematch(){ if(!isHost)return; mapIndex=(mapIndex+1)%MAPS.length; OBS=MAPS[mapIndex].obs; G.mapIndex=mapIndex;
+  G.scores=[0,0,0,0]; G.phase="play"; G.winner=-1; resetRound();
+  G.event=null; G.eventCd=14; showToast("NEXT MAP: "+MAPS[mapIndex].name); }
 
 function beginMatch(){
   buildGameFromSlots(); snap.prev=snap.cur=null;
@@ -697,7 +704,7 @@ function beginMatch(){
   document.getElementById("ping").classList.remove("hidden");
   document.getElementById("wbar").classList.remove("hidden");
   buildScoreboard(serializeState());
-  gameRunning=true; last=performance.now(); showToast("FIGHT!"); requestAnimationFrame(loop);
+  gameRunning=true; last=performance.now(); showToast(MAPS[mapIndex].name+" — FIGHT!"); requestAnimationFrame(loop);
 }
 function hostStartGame(){ if(activeCount()<2)return; broadcast({t:"start",slots:lobbySlots}); beginMatch(); }
 

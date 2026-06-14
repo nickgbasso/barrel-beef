@@ -7,131 +7,134 @@
 <script src="ranch.js"></script>
 <script>
 "use strict";
-/* RANCH RUSH — co-op herding. Spook skittish cattle (boids) into the pen before
-   the clock runs out. Pure crowd-AI herding, no weapons. 1–4 players + bots. */
+/* WISPWELL — co-op herding JOURNEY. Travel through biomes night by night, each
+   with its own look and new wisp types (calm drifters, fast bolters, splitters).
+   Shepherd every wisp into the well before dawn to move deeper. 1–4 wardens. */
 const W=1100,D=700;
 const PEN={x:W/2-110,z:34,w:220,d:130}, PC={x:PEN.x+PEN.w/2,z:PEN.z+PEN.d/2};
 const OBS=[{x:W/2-200,z:D-150,w:130,d:84},{x:130,z:300,w:60,d:60},{x:W-200,z:330,w:60,d:60}];
-const PSPD=300, DASH_CD=1.1, DASH_T=0.16, BARK_CD=2.2, BARK_R=150;
-const FLEE_R=155, SEP_R=36, CMAX=235;
+const PSPD=300, DASH_CD=1.1, DASH_T=0.16, BARK_CD=2.2, BARK_R=150, SEP_R=36;
 const IDLE={u:0,d:0,l:0,r:0,da:0,bk:0};
-let R3,G=null, gP=[], cP=[], penMesh, penEdge;
+const BIOMES=[
+  {name:"MOONLIT GROVE", bg:0x070a18, floor:0x0e1530, g1:0x2a3a72, g2:0x182347, wall:0x232a44, wedge:0x6a7bd0, wisp:"#cdeeff"},
+  {name:"MIST MARSH",    bg:0x06130e, floor:0x0c2018, g1:0x1f5a3e, g2:0x123320, wall:0x1a3a2a, wedge:0x4fd6a0, wisp:"#c9ffe6"},
+  {name:"EMBER HOLLOW",  bg:0x140a06, floor:0x241208, g1:0x6a3a1a, g2:0x3a2010, wall:0x3a2414, wedge:0xff9a4d, wisp:"#ffd9b0"},
+  {name:"VOID SHORE",    bg:0x0a0614, floor:0x160a26, g1:0x4a2a72, g2:0x281643, wall:0x2e1a4a, wedge:0xb06bff, wisp:"#e6c9ff"},
+];
+const biomeAt=(n)=>BIOMES[(n-1)%BIOMES.length];
+let R3,G=null, gP=[], cP=[], penMesh, floorMesh, gridMesh, wallGroup, cliBi=-1;
 
 function sfx(f,d,t,v){ const a=window.__AC; if(!a)return; const o=a.createOscillator(),g=a.createGain();
   o.type=t||"square"; o.frequency.setValueAtTime(f,a.currentTime); o.frequency.exponentialRampToValueAtTime(Math.max(50,f*0.5),a.currentTime+d);
   g.gain.setValueAtTime(v||0.05,a.currentTime); g.gain.exponentialRampToValueAtTime(0.0001,a.currentTime+d); o.connect(g).connect(a.destination); o.start(); o.stop(a.currentTime+d); }
-
-/* input */
 const K={}; addEventListener("keydown",e=>{ if(["ArrowUp","ArrowDown","ArrowLeft","ArrowRight"," "].includes(e.key))e.preventDefault(); K[e.code]=1; });
 addEventListener("keyup",e=>K[e.code]=0); addEventListener("blur",()=>{for(const k in K)K[k]=0;});
 
 const GAME={
-  id:"ranchrush", name:"WISPWELL", tag:"co-op spirit herding · 1–4",
-  soloLabel:"SOLO WARD", minStart:1, startLabel:"OPEN THE WELL", lobbyTitle:"THE GROVE", soloTitle:"SOLO WARD",
-  lobbySub:"add wardens or wait for friends", soloSub:"add spirit-wardens, then ward", waitText:"waiting for the keeper to begin…",
-  againText:"SPACE = WARD AGAIN",
+  id:"ranchrush", name:"WISPWELL", tag:"co-op herding journey · 1–4", soloLabel:"SOLO WARD", minStart:1,
+  startLabel:"OPEN THE WELL", lobbyTitle:"THE GROVE", soloTitle:"SOLO WARD", lobbySub:"add wardens or wait for friends",
+  soloSub:"add spirit-wardens, then ward", waitText:"waiting for the keeper to begin…", againText:"SPACE = WARD AGAIN",
   homeHint:'<div class="keys"><div><b>W A S D</b> move</div><div><b>SHIFT</b> glide</div><div><b>SPACE</b> WARD-PULSE</div></div>'+
-           '<div class="hint">You\'re a warden of the grove. The wisps drift away from you — use their fear to shepherd the whole skittish swarm into the moonlit well before dawn breaks. WARD-PULSE to scatter a cluster. Co-op: well them all to reach the next night. How long can the grove hold?</div>',
+           '<div class="hint">Each night the journey moves to a new biome — grove, marsh, hollow, shore — and new wisps appear: fast red bolters, splitters that divide when scared. Shepherd them all into the well before dawn to travel deeper. Endless; how far can the grove carry the light?</div>',
 
   init(){ R3=Ranch3D(document.getElementById("cv"),{W,D,bg:0x070a18,hemiTop:0x9fb6ff,hemiBot:0x070914,dirCol:0xcdd9ff,camH:1040,camZ:600,fov:55});
-    R3.floorGrid(0x0e1530,0x2a3a72,0x182347); R3.walls(OBS,0x232a44,0x1a2138,0x6a7bd0);
-    for(let i=0;i<4;i++){ const c=COLORS[i].hex; const g=new THREE.Group();
+    floorMesh=new THREE.Mesh(new THREE.BoxGeometry(W+8,20,D+8),new THREE.MeshStandardMaterial({color:0x0e1530,roughness:0.95,metalness:0.08})); floorMesh.position.set(W/2,-10,D/2); R3.scene.add(floorMesh);
+    gridMesh=new THREE.GridHelper(Math.max(W,D),Math.round(Math.max(W,D)/40),0x2a3a72,0x182347); gridMesh.position.set(W/2,1.2,D/2); R3.scene.add(gridMesh);
+    const pm=new THREE.MeshStandardMaterial({color:0x232a44,roughness:0.7,metalness:0.2,emissive:0x141a2c,emissiveIntensity:0.3});
+    function pbox(x,z,w,d){ const m=new THREE.Mesh(new THREE.BoxGeometry(w,60,d),pm); m.position.set(x+w/2,30,z+d/2); R3.scene.add(m); }
+    const t=24; pbox(-t,-t,W+2*t,t); pbox(-t,D,W+2*t,t); pbox(-t,0,t,D); pbox(W,0,t,D);
+    wallGroup=new THREE.Group(); R3.scene.add(wallGroup);
+    for(let i=0;i<4;i++){ const c=COLORS[i].hex, g=new THREE.Group();
       const m=new THREE.MeshStandardMaterial({color:c,emissive:c,emissiveIntensity:0.5,roughness:0.4});
       const base=new THREE.Mesh(new THREE.CylinderGeometry(16,16,9,20),m); base.position.y=6; g.add(base);
       const dome=new THREE.Mesh(new THREE.SphereGeometry(11,14,10),new THREE.MeshStandardMaterial({color:0x10241a,roughness:0.6})); dome.position.y=12; g.add(dome);
       const nose=new THREE.Mesh(new THREE.ConeGeometry(5,16,12),m); nose.rotation.z=-Math.PI/2; nose.position.set(16,8,0); g.add(nose);
       g.visible=false; R3.scene.add(g); gP.push(g); }
-    for(let i=0;i<90;i++){ const g=new THREE.Group();
+    for(let i=0;i<120;i++){ const g=new THREE.Group();
       const orb=new THREE.Mesh(new THREE.SphereGeometry(11,14,12),new THREE.MeshStandardMaterial({color:0xcdeeff,emissive:0x5ad0ff,emissiveIntensity:0.85,roughness:0.3})); orb.position.y=15; g.add(orb);
       const halo=new THREE.Mesh(new THREE.TorusGeometry(13.5,1.4,6,18),new THREE.MeshBasicMaterial({color:0x8fe0ff,transparent:true,opacity:0.5})); halo.rotation.x=-Math.PI/2; halo.position.y=15; g.add(halo);
       g.visible=false; R3.scene.add(g); cP.push(g); }
-    penMesh=new THREE.Mesh(new THREE.BoxGeometry(PEN.w,2,PEN.d),new THREE.MeshBasicMaterial({color:0x4fd6ff,transparent:true,opacity:0.2}));
-    penMesh.position.set(PC.x,2,PC.z); R3.scene.add(penMesh);
-    penEdge=new THREE.Mesh(new THREE.TorusGeometry(1,1,4,4),new THREE.MeshBasicMaterial({color:0x4fd6ff})); R3.scene.add(penEdge); penEdge.visible=false;
+    penMesh=new THREE.Mesh(new THREE.BoxGeometry(PEN.w,2,PEN.d),new THREE.MeshBasicMaterial({color:0x4fd6ff,transparent:true,opacity:0.2})); penMesh.position.set(PC.x,2,PC.z); R3.scene.add(penMesh);
     const beam=new THREE.Mesh(new THREE.CylinderGeometry(PEN.w*0.34,PEN.w*0.34,180,20,1,true),new THREE.MeshBasicMaterial({color:0x7fe4ff,transparent:true,opacity:0.12,side:2})); beam.position.set(PC.x,90,PC.z); R3.scene.add(beam);
-    const ed=new THREE.LineSegments(new THREE.EdgesGeometry(new THREE.BoxGeometry(PEN.w,70,PEN.d)),new THREE.LineBasicMaterial({color:0x9fefff,transparent:true,opacity:0.6}));
-    ed.position.set(PC.x,35,PC.z); R3.scene.add(ed);
+    const ed=new THREE.LineSegments(new THREE.EdgesGeometry(new THREE.BoxGeometry(PEN.w,70,PEN.d)),new THREE.LineBasicMaterial({color:0x9fefff,transparent:true,opacity:0.6})); ed.position.set(PC.x,35,PC.z); R3.scene.add(ed);
     (function idle(){ if(!G||G._idle)R3.idle(); requestAnimationFrame(idle); })();
   },
 
-  buildState(meta){ G={ph:"play",round:1,score:0,tleft:0,crit:[],players:[],pennedRound:0,_idle:false};
+  buildState(meta){ G={ph:"play",round:1,score:0,tleft:0,crit:[],players:[],_idle:false};
     for(let i=0;i<4;i++){ const a=meta.slots[i]&&(meta.slots[i].kind==="human"||meta.slots[i].kind==="bot");
-      G.players.push({x:120+i*40,z:D-90,a:0,active:!!a,isBot:meta.slots[i]&&meta.slots[i].kind==="bot",barkCd:0,bark:0,dashCd:0,dashT:0,stun:0}); }
+      G.players.push({x:120+i*40,z:D-90,a:0,active:!!a,isBot:meta.slots[i]&&meta.slots[i].kind==="bot",barkCd:0,bark:0,dashCd:0,dashT:0}); }
     startRound(); },
   rematch(){ G.round=1; G.score=0; G.ph="play"; for(const p of G.players){p.x=120;p.z=D-90;} startRound(); },
-  onStart(){ if(G)G._idle=false; },
-  snapshotPhase(){ return G?G.ph:"play"; },
+  onStart(){ if(G)G._idle=false; }, snapshotPhase(){ return G?G.ph:"play"; },
 
-  input(){ return {u:K.KeyW||K.ArrowUp?1:0,d:K.KeyS||K.ArrowDown?1:0,l:K.KeyA||K.ArrowLeft?1:0,r:K.KeyD||K.ArrowRight?1:0,
-    da:K.ShiftLeft||K.ShiftRight?1:0,bk:K.Space?1:0}; },
+  input(){ return {u:K.KeyW||K.ArrowUp?1:0,d:K.KeyS||K.ArrowDown?1:0,l:K.KeyA||K.ArrowLeft?1:0,r:K.KeyD||K.ArrowRight?1:0,da:K.ShiftLeft||K.ShiftRight?1:0,bk:K.Space?1:0}; },
   botInput(i){ const p=G.players[i]; if(!G.crit.length)return IDLE;
     let tgt=null,bd=-1; for(const c of G.crit){ const d=(c.x-PC.x)**2+(c.z-PC.z)**2; if(d>bd){bd=d;tgt=c;} }
     const ang=Math.atan2(tgt.z-PC.z,tgt.x-PC.x), gx=tgt.x+Math.cos(ang)*82, gz=tgt.z+Math.sin(ang)*82;
-    const dx=gx-p.x,dz=gz-p.z; const inp={u:dz<-6?1:0,d:dz>6?1:0,l:dx<-6?1:0,r:dx>6?1:0,da:Math.random()<0.005?1:0,
-      bk:(Math.hypot(p.x-tgt.x,p.z-tgt.z)<120&&p.barkCd<=0&&Math.random()<0.03)?1:0}; return inp; },
+    const dx=gx-p.x,dz=gz-p.z; return {u:dz<-6?1:0,d:dz>6?1:0,l:dx<-6?1:0,r:dx>6?1:0,da:Math.random()<0.005?1:0,bk:(Math.hypot(p.x-tgt.x,p.z-tgt.z)<120&&p.barkCd<=0&&Math.random()<0.03)?1:0}; },
 
   step(dt,inputs){ if(G.ph!=="play")return snap();
     const act=G.players.map((p,i)=>p.active?i:-1).filter(i=>i>=0);
     for(const i of act){ const p=G.players[i], inp=inputs[i]||IDLE;
-      let mx=(inp.r?1:0)-(inp.l?1:0), mz=(inp.d?1:0)-(inp.u?1:0); const ml=Math.hypot(mx,mz)||1; mx/=ml; mz/=ml;
-      const moving=inp.l||inp.r||inp.u||inp.d;
-      let spd=PSPD; if(inp.da&&p.dashCd<=0){p.dashCd=DASH_CD;p.dashT=DASH_T;} if(p.dashCd>0)p.dashCd-=dt;
-      if(p.dashT>0){spd*=2.3;p.dashT-=dt;}
-      if(moving||p.dashT>0){ p.x+=mx*spd*dt; p.z+=mz*spd*dt; p.a=Math.atan2(mz,mx); }
-      clampP(p,16);
+      let mx=(inp.r?1:0)-(inp.l?1:0), mz=(inp.d?1:0)-(inp.u?1:0); const ml=Math.hypot(mx,mz)||1; mx/=ml; mz/=ml; const moving=inp.l||inp.r||inp.u||inp.d;
+      let spd=PSPD; if(inp.da&&p.dashCd<=0){p.dashCd=DASH_CD;p.dashT=DASH_T;} if(p.dashCd>0)p.dashCd-=dt; if(p.dashT>0){spd*=2.3;p.dashT-=dt;}
+      if(moving||p.dashT>0){ p.x+=mx*spd*dt; p.z+=mz*spd*dt; p.a=Math.atan2(mz,mx); } clampP(p,16);
       if(p.barkCd>0)p.barkCd-=dt; if(p.bark>0)p.bark-=dt;
       if(inp.bk&&p.barkCd<=0){ p.barkCd=BARK_CD; p.bark=0.25; sfx(180,0.18,"square",0.06);
-        for(const c of G.crit){ const dx=c.x-p.x,dz=c.z-p.z,d=Math.hypot(dx,dz)||1; if(d<BARK_R){ const f=1-d/BARK_R; c.vx+=(dx/d)*560*f; c.vz+=(dz/d)*560*f; } } }
+        for(let k=G.crit.length-1;k>=0;k--){ const c=G.crit[k]; const dx=c.x-p.x,dz=c.z-p.z,d=Math.hypot(dx,dz)||1; if(d<BARK_R){ const f=1-d/BARK_R; c.vx+=(dx/d)*560*f; c.vz+=(dz/d)*560*f;
+          if(c.kind===2&&!c.split&&d<90&&G.crit.length<110){ c.split=1; G.crit.push({x:c.x,z:c.z,vx:-c.vx,vz:-c.vz,a:0,wa:Math.random()*6.28,wt:0.5,pen:0,dead:false,kind:0,split:1}); } } } }
     }
-    for(const c of G.crit){ let ax=0,az=0;
-      for(const i of act){ const p=G.players[i]; const dx=c.x-p.x,dz=c.z-p.z,d=Math.hypot(dx,dz)||1;
-        if(d<FLEE_R){ const f=1-d/FLEE_R; ax+=(dx/d)*f*950; az+=(dz/d)*f*950; } }
+    for(const c of G.crit){ let ax=0,az=0; const fleeR=c.kind===1?110:155, cmax=c.kind===1?345:235;
+      for(const i of act){ const p=G.players[i]; const dx=c.x-p.x,dz=c.z-p.z,d=Math.hypot(dx,dz)||1; if(d<fleeR){ const f=1-d/fleeR; ax+=(dx/d)*f*950; az+=(dz/d)*f*950; } }
       for(const o of G.crit){ if(o===c)continue; const dx=c.x-o.x,dz=c.z-o.z,d=Math.hypot(dx,dz)||1; if(d<SEP_R){ const f=1-d/SEP_R; ax+=(dx/d)*f*260; az+=(dz/d)*f*260; } }
       c.wt-=dt; if(c.wt<=0){ c.wa=Math.random()*6.28; c.wt=0.5+Math.random(); } ax+=Math.cos(c.wa)*45; az+=Math.sin(c.wa)*45;
       const M=58; if(c.x<M)ax+=(M-c.x)*5; if(c.x>W-M)ax-=(c.x-(W-M))*5; if(c.z<M)az+=(M-c.z)*5; if(c.z>D-M)az-=(c.z-(D-M))*5;
-      c.vx+=ax*dt; c.vz+=az*dt; c.vx*=0.9; c.vz*=0.9;
-      const sp=Math.hypot(c.vx,c.vz); if(sp>CMAX){ c.vx=c.vx/sp*CMAX; c.vz=c.vz/sp*CMAX; }
+      c.vx+=ax*dt; c.vz+=az*dt; c.vx*=0.9; c.vz*=0.9; const sp=Math.hypot(c.vx,c.vz); if(sp>cmax){ c.vx=c.vx/sp*cmax; c.vz=c.vz/sp*cmax; }
       c.x+=c.vx*dt; c.z+=c.vz*dt; if(sp>8)c.a=Math.atan2(c.vz,c.vx); clampC(c,12);
       if(c.x>PEN.x&&c.x<PEN.x+PEN.w&&c.z>PEN.z&&c.z<PEN.z+PEN.d){ c.pen+=dt; if(c.pen>0.4)c.dead=true; } else c.pen=Math.max(0,c.pen-dt*2);
     }
-    for(let k=G.crit.length-1;k>=0;k--){ if(G.crit[k].dead){ R3.boom(G.crit[k].x,G.crit[k].z,"#9fefff",30); G.crit.splice(k,1); G.score++; G.pennedRound++; sfx(660,0.1,"triangle",0.06); } }
-    if(G.crit.length===0){ G.score+=Math.max(0,Math.ceil(G.tleft)); G.round++; sfx(880,0.18,"sine",0.08); RanchNet.toast("NIGHT "+G.round); startRound(); }
+    for(let k=G.crit.length-1;k>=0;k--){ if(G.crit[k].dead){ R3.boom(G.crit[k].x,G.crit[k].z,"#9fefff",30); G.crit.splice(k,1); G.score++; sfx(660,0.1,"triangle",0.06); } }
+    if(G.crit.length===0){ G.score+=Math.max(0,Math.ceil(G.tleft)); G.round++; sfx(880,0.18,"sine",0.08); RanchNet.toast("DAWN — TRAVEL TO "+biomeAt(G.round).name); startRound(); }
     G.tleft-=dt; if(G.tleft<=0&&G.crit.length>0){ G.ph="over"; sfx(110,0.5,"sawtooth",0.1); }
     return snap(); },
 
   ingest(){}, interp(a,b,t){ const ps=[]; for(let i=0;i<4;i++){ const pa=a.ps[i],pb=b.ps[i];
       ps.push(pb.ac?{ac:1,x:pa.x+(pb.x-pa.x)*t,z:pa.z+(pb.z-pa.z)*t,a:pb.a,bk:pb.bk}:{ac:0}); }
-    return {ph:b.ph,ps,cr:b.cr,round:b.round,tleft:b.tleft,score:b.score,left:b.left}; },
+    return {ph:b.ph,ps,cr:b.cr,round:b.round,tleft:b.tleft,score:b.score,left:b.left,bi:b.bi}; },
 
-  render(f,info){ const dt=RanchNet.fnGet?0.016:0.016;
-    for(let i=0;i<4;i++){ const p=f.ps[i], g=gP[i]; if(!p.ac){ g.visible=false; continue; }
-      g.visible=true; g.position.set(p.x,0,p.z); g.rotation.y=-p.a;
-      g.scale.setScalar(p.bk?1.25:1); }
-    let ci=0; for(const c of f.cr){ if(ci>=cP.length)break; const g=cP[ci++]; g.visible=true; g.position.set(c.x,0,c.z); g.rotation.y=-c.a; }
+  render(f,info){ if(f.bi!==cliBi){ applyBiome(f.bi); cliBi=f.bi; } const bio=BIOMES[f.bi];
+    for(let i=0;i<4;i++){ const p=f.ps[i], g=gP[i]; if(!p.ac){ g.visible=false; continue; } g.visible=true; g.position.set(p.x,0,p.z); g.rotation.y=-p.a; g.scale.setScalar(p.bk?1.25:1); }
+    let ci=0; for(const c of f.cr){ if(ci>=cP.length)break; const g=cP[ci++]; g.visible=true; g.position.set(c.x,0,c.z); g.rotation.y=-c.a;
+      const col=c.k===1?"#ff6a8a":c.k===2?"#b9ff8f":bio.wisp; g.children[0].material.color.set(col); g.children[0].material.emissive.set(col); }
     for(;ci<cP.length;ci++)cP[ci].visible=false;
-    const pulse=0.13+Math.abs(Math.sin(performance.now()/500))*0.12; penMesh.material.opacity=pulse;
-    // HUD
-    const bar=document.getElementById("topBar");
-    bar.innerHTML='<span style="color:#7fc8ff">NIGHT '+f.round+'</span>'+
+    penMesh.material.opacity=0.13+Math.abs(Math.sin(performance.now()/500))*0.12;
+    document.getElementById("topBar").innerHTML='<span style="color:'+z2css(bio.wedge)+'">NIGHT '+f.round+' · '+bio.name+'</span>'+
       '<span style="color:'+(f.tleft<=8?"#ff6b6b":"#e8ecff")+'">☾ '+Math.max(0,f.tleft)+'s</span>'+
       '<span style="color:#c9a7ff">✦ '+f.left+' adrift</span>'+
       '<span style="color:#4fd6ff">WELLED '+f.score+'</span>';
-    document.getElementById("botHud").innerHTML='<div style="background:rgba(8,12,26,.7);border:1px solid #232b52;border-radius:12px;padding:8px 16px;font-weight:800;color:#9fd0ff">SPACE = WARD-PULSE ✦ · guide the wisps into the moonlit well</div>';
-    R3.render(dt); },
-  endText(f){ return "DAWN BREAKS — WELLED "+f.score+" · REACHED NIGHT "+f.round; },
+    document.getElementById("botHud").innerHTML='<div style="background:rgba(8,12,26,.7);border:1px solid #232b52;border-radius:12px;padding:8px 16px;font-weight:800;color:#9fd0ff">SPACE = WARD-PULSE ✦ · red bolters are fast · green splitters divide</div>';
+    R3.render(0.016); },
+  endText(f){ return "DAWN BREAKS — WELLED "+f.score+" · REACHED NIGHT "+f.round+" ("+biomeAt(f.round).name+")"; },
 };
+function z2css(h){ return "#"+h.toString(16).padStart(6,"0"); }
 function snap(){ return { ph:G.ph, ps:G.players.map(p=>p.active?{ac:1,x:Math.round(p.x),z:Math.round(p.z),a:+p.a.toFixed(2),bk:p.bark>0?1:0}:{ac:0}),
-  cr:G.crit.map(c=>({x:Math.round(c.x),z:Math.round(c.z),a:+c.a.toFixed(2)})), round:G.round, tleft:Math.max(0,Math.ceil(G.tleft)), score:G.score, left:G.crit.length }; }
-function startRound(){ const n=4+G.round*3; G.crit=[]; G.tleft=40+G.round*6; G.pennedRound=0;
+  cr:G.crit.map(c=>({x:Math.round(c.x),z:Math.round(c.z),a:+c.a.toFixed(2),k:c.kind})), round:G.round, tleft:Math.max(0,Math.ceil(G.tleft)), score:G.score, left:G.crit.length, bi:(G.round-1)%BIOMES.length }; }
+function startRound(){ const n=4+G.round*3; G.crit=[]; G.tleft=40+G.round*6;
+  const boltCh=Math.min(0.5,(G.round-1)*0.12), splitCh=G.round>=3?Math.min(0.3,(G.round-2)*0.1):0;
   for(let i=0;i<n;i++){ let x,z,ok=false,tries=0;
     do{ x=80+Math.random()*(W-160); z=200+Math.random()*(D-260); ok=!(x>PEN.x-40&&x<PEN.x+PEN.w+40&&z<PEN.z+PEN.d+60);
         for(const o of OBS) if(x>o.x-20&&x<o.x+o.w+20&&z>o.z-20&&z<o.z+o.d+20)ok=false; tries++; }while(!ok&&tries<20);
-    G.crit.push({x,z,vx:0,vz:0,a:0,wa:Math.random()*6.28,wt:Math.random(),pen:0,dead:false}); } }
+    let kind=0; const r=Math.random(); if(r<boltCh)kind=1; else if(r<boltCh+splitCh)kind=2;
+    G.crit.push({x,z,vx:0,vz:0,a:0,wa:Math.random()*6.28,wt:Math.random(),pen:0,dead:false,kind,split:0}); } }
 function clampP(p,r){ p.x=Math.max(r,Math.min(W-r,p.x)); p.z=Math.max(r,Math.min(D-r,p.z));
-  for(const b of OBS){ const cx=Math.max(b.x,Math.min(p.x,b.x+b.w)),cz=Math.max(b.z,Math.min(p.z,b.z+b.d)); const dx=p.x-cx,dz=p.z-cz,d=Math.hypot(dx,dz);
-    if(d<r&&d>0){ p.x=cx+dx/d*r; p.z=cz+dz/d*r; } } }
+  for(const b of OBS){ const cx=Math.max(b.x,Math.min(p.x,b.x+b.w)),cz=Math.max(b.z,Math.min(p.z,b.z+b.d)); const dx=p.x-cx,dz=p.z-cz,d=Math.hypot(dx,dz); if(d<r&&d>0){ p.x=cx+dx/d*r; p.z=cz+dz/d*r; } } }
 function clampC(c,r){ c.x=Math.max(r,Math.min(W-r,c.x)); c.z=Math.max(r,Math.min(D-r,c.z));
-  for(const b of OBS){ const cx=Math.max(b.x,Math.min(c.x,b.x+b.w)),cz=Math.max(b.z,Math.min(c.z,b.z+b.d)); const dx=c.x-cx,dz=c.z-cz,d=Math.hypot(dx,dz);
-    if(d<r&&d>0){ c.x=cx+dx/d*r; c.z=cz+dz/d*r; c.vx*=0.5; c.vz*=0.5; } } }
+  for(const b of OBS){ const cx=Math.max(b.x,Math.min(c.x,b.x+b.w)),cz=Math.max(b.z,Math.min(c.z,b.z+b.d)); const dx=c.x-cx,dz=c.z-cz,d=Math.hypot(dx,dz); if(d<r&&d>0){ c.x=cx+dx/d*r; c.z=cz+dz/d*r; c.vx*=0.5; c.vz*=0.5; } } }
+function applyBiome(bi){ const b=BIOMES[bi]; R3.scene.background.setHex(b.bg); R3.fog.color.setHex(b.bg); floorMesh.material.color.setHex(b.floor);
+  R3.scene.remove(gridMesh); gridMesh=new THREE.GridHelper(Math.max(W,D),Math.round(Math.max(W,D)/40),b.g1,b.g2); gridMesh.position.set(W/2,1.2,D/2); R3.scene.add(gridMesh);
+  while(wallGroup.children.length)wallGroup.remove(wallGroup.children[0]);
+  const wm=new THREE.MeshStandardMaterial({color:b.wall,roughness:0.7,metalness:0.2,emissive:b.wall,emissiveIntensity:0.22});
+  for(const o of OBS){ const m=new THREE.Mesh(new THREE.BoxGeometry(o.w,55,o.d),wm); m.position.set(o.x+o.w/2,27,o.z+o.d/2); wallGroup.add(m);
+    const e=new THREE.LineSegments(new THREE.EdgesGeometry(m.geometry),new THREE.LineBasicMaterial({color:b.wedge,transparent:true,opacity:0.5})); e.position.copy(m.position); wallGroup.add(e); } }
 RanchNet.start(GAME);
 </script></body></html>

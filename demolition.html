@@ -11,7 +11,7 @@
    your blasts. Last one standing takes the round; first to 3 rounds wins.
    2–4 players + bots. */
 const GX=15, GZ=11, CELL=72, W=GX*CELL, D=GZ*CELL, PRAD=22;
-const FUSE=2.3, FLAME=0.5, WINROUNDS=3;
+const FUSE=2.3, FLAME=0.5, WINROUNDS=5;
 const CORNER=[[1,1],[GX-2,GZ-2],[GX-2,1],[1,GZ-2]];
 const IDLE={u:0,d:0,l:0,r:0,bomb:0};
 let R3,G=null, gP=[], crateP=[], bombP=[], flameP=[], pupP=[];
@@ -50,7 +50,7 @@ const GAME={
     (function idle(){ if(!G||G._idle)R3.idle(); requestAnimationFrame(idle); })();
   },
 
-  buildState(meta){ G={ph:"play",w:-1,players:[],grid:[],bombs:[],flames:[],pups:[],roundState:"play",restartT:0,_idle:false};
+  buildState(meta){ G={ph:"play",w:-1,players:[],grid:[],bombs:[],flames:[],pups:[],roundState:"play",restartT:0,stage:0,_idle:false};
     for(let i=0;i<4;i++){ const a=meta.slots[i]&&(meta.slots[i].kind==="human"||meta.slots[i].kind==="bot");
       G.players.push({x:wc(CORNER[i][0]),z:wc(CORNER[i][1]),active:!!a,isBot:meta.slots[i]&&meta.slots[i].kind==="bot",alive:true,mb:1,rg:2,spd:0,wins:0,botT:0}); }
     newRound(); },
@@ -123,19 +123,20 @@ const GAME={
     for(;ui<pupP.length;ui++)pupP[ui].visible=false;
     const bar=document.getElementById("topBar"); let h="";
     for(let i=0;i<4;i++){ const p=f.ps[i]; if(!p.ac)continue; h+='<span class="scp'+(i===info.myIdx?" me":"")+'" style="color:'+COLORS[i].css+';opacity:'+(p.alive?1:0.4)+'"><span class="dot" style="background:'+COLORS[i].css+'"></span>'+p.wins+'</span>'; }
-    h+='<span style="color:#8a93b8;font-size:12px">to '+WINROUNDS+'</span>'; bar.innerHTML=h;
+    h+='<span style="color:#8a93b8;font-size:12px">STAGE '+(f.stage||1)+' · win '+WINROUNDS+'</span>'; bar.innerHTML=h;
     const me=f.ps[info.myIdx]; document.getElementById("botHud").innerHTML='<div style="background:rgba(8,12,26,.7);border:1px solid #232b52;border-radius:12px;padding:8px 16px;font-weight:800;color:#cfd6ee">'+(me&&me.ac?("💣 ×"+me.mb+"  ⟷ "+me.rg+(me.alive?"":"  · DEAD")):"spectating")+'</div>';
     R3.render(0.016); },
   endText(f,myIdx){ return f.w===myIdx?"LAST ONE STANDING — YOU WIN!":(COLORS[f.w]?COLORS[f.w].name+" WINS THE YARD":"GAME OVER"); },
 };
 let gridClient=null;
-function snap(){ const s={ ph:G.ph,w:G.w,
+function snap(){ const s={ ph:G.ph,w:G.w,stage:G.stage,
   ps:G.players.map(p=>p.active?{ac:1,x:Math.round(p.x),z:Math.round(p.z),alive:p.alive?1:0,wins:p.wins,mb:p.mb,rg:p.rg}:{ac:0}),
   bombs:G.bombs.map(b=>({cx:b.cx,cz:b.cz})), flames:G.flames.map(f=>({cx:f.cx,cz:f.cz})), pups:G.pups.map(u=>({cx:u.cx,cz:u.cz,k:u.k})) };
   s.grid=G.grid.slice(); return s; }
-function newRound(){ G.grid=new Array(GX*GZ).fill(0); G.bombs=[]; G.flames=[]; G.pups=[]; G.roundState="play";
+function newRound(){ G.grid=new Array(GX*GZ).fill(0); G.bombs=[]; G.flames=[]; G.pups=[]; G.roundState="play"; G.stage=(G.stage||0)+1; RanchNet.toast("STAGE "+G.stage);
+  const density=Math.min(0.84,0.60+G.stage*0.025);
   const safe=new Set(); for(const[cx,cz]of CORNER){ safe.add(cx+","+cz); safe.add((cx+1)+","+cz); safe.add((cx-1)+","+cz); safe.add(cx+","+(cz+1)); safe.add(cx+","+(cz-1)); }
-  for(let cz=1;cz<GZ-1;cz++)for(let cx=1;cx<GX-1;cx++){ if(isSolidCell(cx,cz))continue; if(safe.has(cx+","+cz))continue; if(Math.random()<0.72)G.grid[cz*GX+cx]=2; }
+  for(let cz=1;cz<GZ-1;cz++)for(let cx=1;cx<GX-1;cx++){ if(isSolidCell(cx,cz))continue; if(safe.has(cx+","+cz))continue; if(Math.random()<density)G.grid[cz*GX+cx]=2; }
   for(let i=0;i<4;i++){ const p=G.players[i]; if(!p.active)continue; p.x=wc(CORNER[i][0]); p.z=wc(CORNER[i][1]); p.alive=true; } }
 function blastCells(b){ const out=[{cx:b.cx,cz:b.cz}]; for(const[dx,dz]of [[1,0],[-1,0],[0,1],[0,-1]]){ for(let s=1;s<=b.range;s++){ const cx=b.cx+dx*s,cz=b.cz+dz*s; if(!inb(cx,cz))break; const g=G.grid[cz*GX+cx]; if(g===1)break; out.push({cx,cz}); if(g===2)break; } } return out; }
 function dangerSet(){ const s=new Set(); for(const b of G.bombs){ for(const c of blastCells(b))s.add(c.cx+","+c.cz); } for(const f of G.flames)s.add(f.cx+","+f.cz); return s; }

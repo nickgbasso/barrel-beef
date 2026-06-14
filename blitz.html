@@ -10,7 +10,7 @@
 /* BLITZ — futuristic team sport. Two teams, one ball, knock it into the enemy
    goal. Boost to slam the ball or beat a rival to it. Auto-split into teams.
    2–4 players + bots. First to 7. */
-const W=1120,D=720, PR=18, BALLR=15, GMZ=[D/2-100,D/2+100], TARGET=7, MATCH=180;
+const W=1120,D=720, PR=18, BALLR=15, GMZ=[D/2-100,D/2+100], TARGET=5, SETS=2, MATCH=180;
 const PSPD=290, BOOSTSPD=470, IDLE={u:0,d:0,l:0,r:0,da:0};
 const TCOL=[0x2ad1ff,0xff7a33];
 let R3,G=null, gP=[], gRing=[], ballMesh;
@@ -26,7 +26,7 @@ const GAME={
   startLabel:"KICKOFF", lobbyTitle:"TEAM SELECT", soloTitle:"SOLO MATCH", lobbySub:"add players — teams auto-split",
   soloSub:"add bots — you vs them", waitText:"waiting for kickoff…", againText:"SPACE = NEXT MATCH",
   homeHint:'<div class="keys"><div><b>W A S D</b> drive</div><div><b>SHIFT</b> boost</div></div>'+
-           '<div class="hint">Knock the ball into the enemy goal. Players are split into two teams (cyan vs orange). BOOST to slam the ball or check a rival off it — but your boost meter drains. Spacing and passing beat ball-chasing. First team to '+TARGET+'.</div>',
+           '<div class="hint">Knock the ball into the enemy goal. Players auto-split into two teams (cyan vs orange). BOOST to slam the ball or check a rival — but your meter drains. It\'s a cup: first to '+TARGET+' goals wins a set, first to '+SETS+' sets takes the match.</div>',
 
   init(){ R3=Ranch3D(document.getElementById("cv"),{W,D,bg:0x06080f,hemiTop:0x6688ff,hemiBot:0x07080e,dirCol:0xdfe6ff,camH:1040,camZ:600,fov:55});
     R3.floorGrid(0x0b1020,0x1d2748,0x12182e);
@@ -47,11 +47,11 @@ const GAME={
     (function idle(){ if(!G||G._idle)R3.idle(); requestAnimationFrame(idle); })();
   },
 
-  buildState(meta){ G={ph:"play",w:-1,players:[],ball:{x:W/2,z:D/2,vx:0,vz:0},sa:0,sb:0,time:0,freeze:1.2,_idle:false};
+  buildState(meta){ G={ph:"play",w:-1,players:[],ball:{x:W/2,z:D/2,vx:0,vz:0},sa:0,sb:0,setsA:0,setsB:0,time:0,freeze:1.2,_idle:false};
     let na=0,nb=0; for(let i=0;i<4;i++){ const a=meta.slots[i]&&(meta.slots[i].kind==="human"||meta.slots[i].kind==="bot"); const team=i%2;
       const sx=team===0?W*0.3:W*0.7; G.players.push({x:sx,z:120+i*150%D,a:0,active:!!a,isBot:meta.slots[i]&&meta.slots[i].kind==="bot",team,boost:1,dashT:0}); }
     reset(0); },
-  rematch(){ G.ph="play"; G.w=-1; G.sa=0; G.sb=0; G.time=0; reset(0); },
+  rematch(){ G.ph="play"; G.w=-1; G.sa=0; G.sb=0; G.setsA=0; G.setsB=0; G.time=0; reset(0); },
   onStart(){ if(G)G._idle=false; }, snapshotPhase(){ return G?G.ph:"play"; },
 
   input(){ return {u:K.KeyW||K.ArrowUp?1:0,d:K.KeyS||K.ArrowDown?1:0,l:K.KeyA||K.ArrowLeft?1:0,r:K.KeyD||K.ArrowRight?1:0,da:K.ShiftLeft||K.ShiftRight?1:0}; },
@@ -86,7 +86,7 @@ const GAME={
     const inMouth=(b.z>GMZ[0]&&b.z<GMZ[1]);
     if(b.x<BALLR){ if(inMouth&&b.x<6){ goal(1); return snap(); } b.x=BALLR; b.vx=Math.abs(b.vx); }
     if(b.x>W-BALLR){ if(inMouth&&b.x>W-6){ goal(0); return snap(); } b.x=W-BALLR; b.vx=-Math.abs(b.vx); }
-    G.time+=dt; if(G.time>=MATCH){ G.ph="win"; G.w=G.sa>=G.sb?0:1; }
+    G.time+=dt;
     return snap(); },
 
   ingest(){}, interp(a,b,t){ const ps=[]; for(let i=0;i<4;i++){ const pa=a.ps[i],pb=b.ps[i];
@@ -100,7 +100,7 @@ const GAME={
     const me=f.ps[info.myIdx], myTeam=me&&me.ac?me.team:0;
     const bar=document.getElementById("topBar");
     bar.innerHTML='<span class="scp" style="color:'+css(TCOL[0])+'"><span class="dot" style="background:'+css(TCOL[0])+'"></span>'+f.sa+'</span>'+
-      '<span style="color:#8a93b8;font-size:12px">'+Math.max(0,Math.ceil(MATCH-f.time))+'s · to '+TARGET+'</span>'+
+      '<span style="color:#8a93b8;font-size:12px">SETS '+f.setsA+'–'+f.setsB+' · goals to '+TARGET+'</span>'+
       '<span class="scp" style="color:'+css(TCOL[1])+'"><span class="dot" style="background:'+css(TCOL[1])+'"></span>'+f.sb+'</span>';
     const bo=me&&me.ac?Math.round(me.boost*100):0;
     document.getElementById("botHud").innerHTML='<div style="background:rgba(8,12,26,.7);border:1px solid #232b52;border-radius:12px;padding:8px 16px;font-weight:800;color:'+css(TCOL[myTeam])+'">YOUR TEAM: '+(myTeam===0?"CYAN":"ORANGE")+' · BOOST '+bo+'%</div>';
@@ -108,11 +108,15 @@ const GAME={
   endText(f,myIdx){ const myTeam=myIdx%2; return f.w===myTeam?"YOUR TEAM WINS! 🏆":((f.w===0?"CYAN":"ORANGE")+" TEAM WINS"); },
 };
 function css(hex){ return "#"+hex.toString(16).padStart(6,"0"); }
-function snap(){ const b=G.ball; return { ph:G.ph,w:G.w,
+function snap(){ const b=G.ball; return { ph:G.ph,w:G.w,setsA:G.setsA,setsB:G.setsB,
   ps:G.players.map(p=>p.active?{ac:1,x:Math.round(p.x),z:Math.round(p.z),a:+p.a.toFixed(2),team:p.team,boost:+p.boost.toFixed(2),bo:p.boosting?1:0}:{ac:0}),
   ball:{x:Math.round(b.x),z:Math.round(b.z)}, sa:G.sa, sb:G.sb, time:+G.time.toFixed(1) }; }
 function goal(team){ if(team===0)G.sa++; else G.sb++; R3.boom(G.ball.x,G.ball.z,css(TCOL[team]),70); R3.setShake(16); sfx(660,0.3,"sine",0.1);
-  RanchNet.toast((team===0?"CYAN":"ORANGE")+" SCORES!"); if(G.sa>=TARGET||G.sb>=TARGET){ G.ph="win"; G.w=G.sa>=TARGET?0:1; } else reset(team); }
+  RanchNet.toast((team===0?"CYAN":"ORANGE")+" SCORES!");
+  if(G.sa>=TARGET||G.sb>=TARGET){ const sw=G.sa>=TARGET?0:1; if(sw===0)G.setsA++; else G.setsB++;
+    if(G.setsA>=SETS||G.setsB>=SETS){ G.ph="win"; G.w=G.setsA>=SETS?0:1; }
+    else { RanchNet.toast((sw===0?"CYAN":"ORANGE")+" TAKE THE SET ("+G.setsA+"–"+G.setsB+")"); G.sa=0; G.sb=0; reset(sw); } }
+  else reset(team); }
 function reset(scoredTeam){ G.ball={x:W/2,z:D/2,vx:0,vz:0}; G.freeze=1.1;
   for(let i=0;i<4;i++){ const p=G.players[i]; if(!p.active)continue; const sx=p.team===0?W*0.3:W*0.7; p.x=sx; p.z=120+(i*170)%(D-160); p.boost=Math.max(p.boost,0.6); } }
 RanchNet.start(GAME);

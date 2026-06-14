@@ -10,7 +10,7 @@
 /* BRAND WARS — PvP territory control. Roll around branding the ground your color.
    Drive over rivals' turf to flip it. Most ground branded when the clock hits 0 wins.
    Dash to bump a rival and freeze their roller. 2–4 players + bots. */
-const W=1100,D=700, GX=44, GZ=28, CW=W/GX, CD=D/GZ, MATCH=75;
+const W=1100,D=700, GX=44, GZ=28, CW=W/GX, CD=D/GZ, MATCH=45, DISTRICTS=3;
 const PSPD=300, DASH_CD=1.0, DASH_T=0.15, IDLE={u:0,d:0,l:0,r:0,da:0};
 let R3,G=null, gP=[], cells, botT=[], botCd=[], gridClient=null;
 const OWN_HEX=[0x1b1b22,0x22e3ff,0xff3ea5,0xb6ff3e,0xff9f1c];
@@ -41,11 +41,11 @@ const GAME={
     (function idle(){ if(!G||G._idle)R3.idle(); requestAnimationFrame(idle); })();
   },
 
-  buildState(meta){ G={ph:"play",w:-1,players:[],grid:new Array(GX*GZ).fill(0),time:MATCH,tick:0,_idle:false};
+  buildState(meta){ G={ph:"play",w:-1,players:[],grid:new Array(GX*GZ).fill(0),time:MATCH,tick:0,round:1,roundsWon:[0,0,0,0],_idle:false};
     const corners=[{x:90,z:90},{x:W-90,z:D-90},{x:W-90,z:90},{x:90,z:D-90}];
     for(let i=0;i<4;i++){ const a=meta.slots[i]&&(meta.slots[i].kind==="human"||meta.slots[i].kind==="bot");
       G.players.push({x:corners[i].x,z:corners[i].z,a:0,active:!!a,isBot:meta.slots[i]&&meta.slots[i].kind==="bot",stun:0,dashCd:0,dashT:0}); botT[i]=null; botCd[i]=0; } },
-  rematch(){ G.ph="play"; G.w=-1; G.time=MATCH; G.grid=new Array(GX*GZ).fill(0);
+  rematch(){ G.ph="play"; G.w=-1; G.time=MATCH; G.round=1; G.roundsWon=[0,0,0,0]; G.grid=new Array(GX*GZ).fill(0);
     const corners=[{x:90,z:90},{x:W-90,z:D-90},{x:W-90,z:90},{x:90,z:D-90}]; for(let i=0;i<4;i++){ const p=G.players[i]; p.x=corners[i].x;p.z=corners[i].z;p.stun=0; } },
   onStart(){ if(G)G._idle=false; }, snapshotPhase(){ return G?G.ph:"play"; },
 
@@ -72,20 +72,23 @@ const GAME={
       paint(i,p);
       if(p.dashT>0){ for(const j of act){ if(j===i)continue; const q=G.players[j]; if(q.stun>0)continue; if(Math.hypot(q.x-p.x,q.z-p.z)<40){ q.stun=0.7; sfx(180,0.12,"square",0.05); } } }
     }
-    G.time-=dt; if(G.time<=0){ const c=counts(); let mx=-1,w=-1; for(let i=0;i<4;i++) if(G.players[i].active&&c[i+1]>mx){mx=c[i+1];w=i;} G.ph="win"; G.w=w; sfx(660,0.3,"sine",0.08); }
+    G.time-=dt; if(G.time<=0){ const c=counts(); let mx=-1,w=-1; for(let i=0;i<4;i++) if(G.players[i].active&&c[i+1]>mx){mx=c[i+1];w=i;}
+      if(w>=0)G.roundsWon[w]++; sfx(660,0.3,"sine",0.08);
+      if(G.round>=DISTRICTS){ let bw=-1,bp=-1; for(let i=0;i<4;i++)if(G.players[i].active&&G.roundsWon[i]>bp){bp=G.roundsWon[i];bw=i;} G.ph="win"; G.w=bw; }
+      else { G.round++; G.grid=new Array(GX*GZ).fill(0); G.time=MATCH; RanchNet.toast("DISTRICT "+G.round+(w>=0?" — "+COLORS[w].name+" took the last":"")); } }
     G.tick++; return snap(G.tick%5===0); },
 
   ingest(d){ if(d.grid){ const g=d.grid, arr=new Array(g.length); for(let k=0;k<g.length;k++)arr[k]=g.charCodeAt(k)-48; gridClient=arr; } },
   interp(a,b,t){ const ps=[]; for(let i=0;i<4;i++){ const pa=a.ps[i],pb=b.ps[i];
       ps.push(pb.ac?{ac:1,x:pa.x+(pb.x-pa.x)*t,z:pa.z+(pb.z-pa.z)*t,a:pb.a,stun:pb.stun}:{ac:0}); }
-    return {ph:b.ph,w:b.w,ps,time:b.time,counts:b.counts,grid:b.grid}; },
+    return {ph:b.ph,w:b.w,ps,time:b.time,counts:b.counts,grid:b.grid,round:b.round,roundsWon:b.roundsWon}; },
 
   render(f,info){ const grid=info.isHost?G.grid:gridClient;
     if(grid){ for(let k=0;k<GX*GZ;k++)cells.setColorAt(k,OWN_COL[grid[k]||0]); cells.instanceColor.needsUpdate=true; }
     for(let i=0;i<4;i++){ const p=f.ps[i], g=gP[i]; if(!p.ac){ g.visible=false; continue; }
       g.visible=true; g.position.set(p.x,0,p.z); const blink=p.stun?(Math.floor(performance.now()/80)%2?0.35:1):1;
       g.children[0].material.opacity=blink; g.children[0].material.transparent=blink<1; g.children[0].rotation.x+=0.12; g.children[0].rotation.z-=0.08; }
-    const c=f.counts||counts(); const tot=GX*GZ; const bar=document.getElementById("topBar"); let h='<span style="color:'+(f.time<=10?"#ff6b6b":"#e8ecff")+'">⏱ '+Math.max(0,Math.ceil(f.time))+'s</span>';
+    const c=f.counts||counts(); const tot=GX*GZ; const bar=document.getElementById("topBar"); let h='<span style="color:#b6ff3e">DISTRICT '+(f.round||1)+'/'+DISTRICTS+'</span><span style="color:'+(f.time<=10?"#ff6b6b":"#e8ecff")+'">⏱ '+Math.max(0,Math.ceil(f.time))+'s</span>';
     for(let i=0;i<4;i++){ if(!f.ps[i].ac)continue; const pct=Math.round((c[i+1]/tot)*100); h+='<span class="scp'+(i===info.myIdx?" me":"")+'" style="color:'+COLORS[i].css+';font-size:18px"><span class="dot" style="background:'+COLORS[i].css+'"></span>'+pct+'%</span>'; }
     bar.innerHTML=h;
     document.getElementById("botHud").innerHTML='<div style="background:rgba(8,12,26,.7);border:1px solid #232b52;border-radius:12px;padding:8px 16px;font-weight:800;color:#cbb6ff">roll to tag · SHIFT shoves & freezes rivals 🎨</div>';
@@ -96,7 +99,7 @@ function counts(){ const c=[0,0,0,0,0]; for(let k=0;k<G.grid.length;k++)c[G.grid
 function paint(i,p){ const oi=i+1, rad=2, cgx=Math.floor(p.x/CW), cgz=Math.floor(p.z/CD);
   for(let gz=cgz-rad;gz<=cgz+rad;gz++)for(let gx=cgx-rad;gx<=cgx+rad;gx++){ if(gx<0||gz<0||gx>=GX||gz>=GZ)continue;
     const cx=gx*CW+CW/2, cz=gz*CD+CD/2; if((cx-p.x)**2+(cz-p.z)**2<(rad*CW)*(rad*CW)) G.grid[gz*GX+gx]=oi; } }
-function snap(withGrid){ const c=counts(); const s={ ph:G.ph,w:G.w,time:G.time,counts:c,
+function snap(withGrid){ const c=counts(); const s={ ph:G.ph,w:G.w,time:G.time,counts:c,round:G.round,roundsWon:G.roundsWon.slice(),
   ps:G.players.map(p=>p.active?{ac:1,x:Math.round(p.x),z:Math.round(p.z),a:+p.a.toFixed(2),stun:p.stun>0?1:0}:{ac:0}) };
   if(withGrid){ let str=""; for(let k=0;k<G.grid.length;k++)str+=String.fromCharCode(48+(G.grid[k]||0)); s.grid=str; } return s; }
 RanchNet.start(GAME);

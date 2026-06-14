@@ -67,6 +67,8 @@ input.code:focus{outline:none;border-color:var(--cyan)}
 .toast span{font-weight:900;font-size:54px;letter-spacing:3px;background:linear-gradient(90deg,var(--cyan),var(--mag));-webkit-background-clip:text;background-clip:text;color:transparent;
   text-shadow:0 0 50px rgba(34,227,255,.3);opacity:0;transition:opacity .2s,transform .2s;display:inline-block}
 .toast.show span{opacity:1;transform:scale(1.04)}
+.stagebar{position:fixed;top:54px;left:0;right:0;text-align:center;z-index:6;pointer-events:none}
+.stagebar span{display:inline-block;background:rgba(8,14,26,.72);border:1px solid #2a3a66;color:#bcd2ff;font-weight:800;letter-spacing:2px;font-size:13px;border-radius:10px;padding:6px 16px}
 `; document.head.appendChild(s); })();
 
 /* ---------------- DOM scaffold ---------------- */

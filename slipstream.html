@@ -1,21 +1,29 @@
 <!DOCTYPE html><html lang="en"><head>
 <meta charset="UTF-8"/><meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-<title>SLIPSTREAM — arcade racing</title></head><body>
+<title>SLIPSTREAM — grand prix</title></head><body>
 <canvas id="cv"></canvas>
 <script src="https://unpkg.com/three@0.134.0/build/three.min.js"></script>
 <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
 <script src="ranch.js"></script>
 <script>
 "use strict";
-/* SLIPSTREAM — arcade racing. 3 laps round a neon circuit. Throttle, steer,
-   and manage boost; cut corners but don't fall off the track. First across
-   the line wins. 1–4 racers + bots. */
-const W=1240,D=780, N=16, LAPS=3, TRACKW=84, CPR=98;
-const ACC=560, MAXF=560, MAXB=820, MAXR=150, STEER=2.7;
-const IDLE={u:0,d:0,l:0,r:0,da:0};
-const WP=[]; for(let i=0;i<N;i++){ const t=i/N*Math.PI*2; WP.push({x:W/2+Math.cos(t)*470, z:D/2+Math.sin(t)*272}); }
-const BOOSTPADS=[2,6,10,14];
-let R3,G=null, gP=[];
+/* SLIPSTREAM — GRAND PRIX. A championship across four distinct circuits. Each race
+   awards points by finish position; the standings carry across races. Win the
+   season, not just a lap. 1–4 racers + bots. */
+const W=1240,D=780, LAPS=2, ACC=560, MAXF=560, MAXB=820, MAXR=150, STEER=2.7, IDLE={u:0,d:0,l:0,r:0,da:0};
+const PTS=[10,6,3,1];
+/* four circuits — different shapes, widths, biomes */
+function ringTrack(rx,rz,mod){ const wp=[],cx=W/2,cz=D/2,n=16; for(let i=0;i<n;i++){ const t=i/n*Math.PI*2;
+  const rr=1+(mod||0)*Math.cos(2*t); wp.push({x:cx+Math.cos(t)*rx*rr, z:cz+Math.sin(t)*rz}); } return wp; }
+function rrectTrack(rx,rz){ const wp=[],cx=W/2,cz=D/2,n=20; for(let i=0;i<n;i++){ const t=i/n*Math.PI*2;
+  wp.push({x:cx+Math.sign(Math.cos(t))*Math.pow(Math.abs(Math.cos(t)),0.62)*rx, z:cz+Math.sign(Math.sin(t))*Math.pow(Math.abs(Math.sin(t)),0.62)*rz}); } return wp; }
+const TRACKS=[
+  {name:"AURORA RING", wp:ringTrack(470,272,0),    tw:84, bg:0x05070e, surf:0x1a1f2e, edge:0x2f6fff, grid:0x16221c, acc:"#5aa0ff"},
+  {name:"NEON BYPASS", wp:rrectTrack(500,300),     tw:78, bg:0x0a0510, surf:0x231a2e, edge:0xc06bff, grid:0x241626, acc:"#c06bff"},
+  {name:"SPIRE COIL",  wp:ringTrack(430,300,0.22), tw:72, bg:0x0a0a05, surf:0x2a2616, edge:0xffc23a, grid:0x241f10, acc:"#ffc23a"},
+  {name:"VORTEX",      wp:ringTrack(360,260,0.14),  tw:70, bg:0x05100c, surf:0x16261f, edge:0x33ffd0, grid:0x102019, acc:"#33ffd0"},
+];
+let R3,G=null, gP=[], trackGroup, cliRace=-1, floorMesh;
 
 function sfx(f,d,t,v){ const a=window.__AC; if(!a)return; const o=a.createOscillator(),g=a.createGain();
   o.type=t||"square"; o.frequency.setValueAtTime(f,a.currentTime); o.frequency.exponentialRampToValueAtTime(Math.max(40,f*0.5),a.currentTime+d);
@@ -24,25 +32,15 @@ const K={}; addEventListener("keydown",e=>{ if(["ArrowUp","ArrowDown","ArrowLeft
 addEventListener("keyup",e=>K[e.code]=0); addEventListener("blur",()=>{for(const k in K)K[k]=0;});
 
 const GAME={
-  id:"slipstream", name:"SLIPSTREAM", tag:"arcade racing · 1–4", soloLabel:"TIME TRIAL / vs BOTS", minStart:1,
-  startLabel:"LIGHTS OUT", lobbyTitle:"STARTING GRID", soloTitle:"SOLO RACE", lobbySub:"add racers or wait for friends",
-  soloSub:"add AI racers, then race", waitText:"waiting for green light…", againText:"SPACE = RESTART RACE",
+  id:"slipstream", name:"SLIPSTREAM", tag:"grand prix · 1–4", soloLabel:"SOLO GP / vs BOTS", minStart:1,
+  startLabel:"LIGHTS OUT", lobbyTitle:"STARTING GRID", soloTitle:"SOLO GP", lobbySub:"add racers or wait for friends",
+  soloSub:"add AI racers, then race", waitText:"waiting for green light…", againText:"SPACE = NEW SEASON",
   homeHint:'<div class="keys"><div><b>W</b> throttle</div><div><b>S</b> brake</div><div><b>A/D</b> steer</div><div><b>SHIFT</b> boost</div></div>'+
-           '<div class="hint">Three laps around the circuit. Hold the racing line through corners — drift off the track and you bog down in the dirt. Hit boost pads and manage your boost meter. First across the line after '+LAPS+' laps wins.</div>',
+           '<div class="hint">A full championship across four circuits — Aurora Ring, Neon Bypass, Spire Coil and Vortex. Finish position scores points (10 / 6 / 3 / 1) and they carry across the season. Hold the racing line, work your boost, and take the title over all four.</div>',
 
   init(){ R3=Ranch3D(document.getElementById("cv"),{W,D,bg:0x05070e,hemiTop:0x5a78ff,hemiBot:0x06070d,dirCol:0xdfe6ff,camH:1120,camZ:560,fov:56});
-    R3.floorGrid(0x0a1326,0x162a1c,0x0f1c14); // greenish infield/verge
-    // track ribbon
-    const tmat=new THREE.MeshStandardMaterial({color:0x1a1f2e,roughness:0.9,metalness:0.05});
-    for(let i=0;i<N;i++){ const a=WP[i], b=WP[(i+1)%N]; const dx=b.x-a.x,dz=b.z-a.z, len=Math.hypot(dx,dz);
-      const seg=new THREE.Mesh(new THREE.BoxGeometry(len+8,2,TRACKW*2),tmat); seg.position.set((a.x+b.x)/2,1.5,(a.z+b.z)/2); seg.rotation.y=-Math.atan2(dz,dx); R3.scene.add(seg);
-      const edge=new THREE.Mesh(new THREE.BoxGeometry(len+8,5,5),new THREE.MeshBasicMaterial({color:0x2f6fff})); edge.position.set((a.x+b.x)/2,4,(a.z+b.z)/2); edge.rotation.y=-Math.atan2(dz,dx);
-      const e2=edge.clone(); edge.translateZ(TRACKW); e2.translateZ(-TRACKW); R3.scene.add(edge); R3.scene.add(e2); }
-    // boost pads
-    for(const bi of BOOSTPADS){ const a=WP[bi], b=WP[(bi+1)%N]; const m=new THREE.Mesh(new THREE.BoxGeometry(60,2.5,TRACKW*1.4),new THREE.MeshBasicMaterial({color:0x33ffd0,transparent:true,opacity:0.5}));
-      m.position.set((a.x*0.5+b.x*0.5),2.5,(a.z*0.5+b.z*0.5)); m.rotation.y=-Math.atan2(b.z-a.z,b.x-a.x); R3.scene.add(m); }
-    // start/finish line
-    const sf=new THREE.Mesh(new THREE.BoxGeometry(8,3,TRACKW*2),new THREE.MeshBasicMaterial({color:0xffffff})); sf.position.set(WP[0].x,3,WP[0].z); R3.scene.add(sf);
+    floorMesh=new THREE.Mesh(new THREE.BoxGeometry(W+8,20,D+8),new THREE.MeshStandardMaterial({color:0x0a1326,roughness:0.95,metalness:0.05})); floorMesh.position.set(W/2,-10,D/2); R3.scene.add(floorMesh);
+    trackGroup=new THREE.Group(); R3.scene.add(trackGroup);
     for(let i=0;i<4;i++){ const c=COLORS[i].hex, g=new THREE.Group();
       const body=new THREE.Mesh(new THREE.BoxGeometry(40,12,22),new THREE.MeshStandardMaterial({color:c,emissive:c,emissiveIntensity:0.45,roughness:0.35,metalness:0.4})); body.position.y=9; g.add(body);
       const cockpit=new THREE.Mesh(new THREE.BoxGeometry(16,9,16),new THREE.MeshStandardMaterial({color:0x0c1020,roughness:0.4})); cockpit.position.set(-3,15,0); g.add(cockpit);
@@ -51,65 +49,90 @@ const GAME={
     (function idle(){ if(!G||G._idle)R3.idle(); requestAnimationFrame(idle); })();
   },
 
-  buildState(meta){ G={ph:"play",w:-1,players:[],time:0,countdown:3,_idle:false};
-    const a0=WP[0], aPrev=WP[N-1]; const sx=a0.x*0.4+aPrev.x*0.6, sz=a0.z*0.4+aPrev.z*0.6;
-    const tang=Math.atan2(a0.z-aPrev.z,a0.x-aPrev.x), nx=Math.cos(tang+Math.PI/2),nz=Math.sin(tang+Math.PI/2);
-    for(let i=0;i<4;i++){ const a=meta.slots[i]&&(meta.slots[i].kind==="human"||meta.slots[i].kind==="bot"); const off=(i-1.5)*34;
-      G.players.push({x:sx+nx*off,z:sz+nz*off,a:tang,active:!!a,isBot:meta.slots[i]&&meta.slots[i].kind==="bot",spd:0,cp:0,boost:1,fin:0}); } },
-  rematch(){ this.buildState({slots:G.players.map(p=>({kind:p.active?(p.isBot?"bot":"human"):"empty"}))}); G.ph="play"; },
+  buildState(meta){ G={ph:"play",w:-1,players:[],race:0,raceState:"run",countdown:3,interT:0,time:0,points:[0,0,0,0],_idle:false};
+    for(let i=0;i<4;i++){ const a=meta.slots[i]&&(meta.slots[i].kind==="human"||meta.slots[i].kind==="bot");
+      G.players.push({x:0,z:0,a:0,active:!!a,isBot:meta.slots[i]&&meta.slots[i].kind==="bot",spd:0,cp:0,boost:1,fin:0,place:0}); }
+    loadRace(0); },
+  rematch(){ G.race=0; G.points=[0,0,0,0]; G.ph="play"; G.w=-1; loadRace(0); },
   onStart(){ if(G)G._idle=false; }, snapshotPhase(){ return G?G.ph:"play"; },
 
   input(){ return {u:K.KeyW||K.ArrowUp?1:0,d:K.KeyS||K.ArrowDown?1:0,l:K.KeyA||K.ArrowLeft?1:0,r:K.KeyD||K.ArrowRight?1:0,da:K.ShiftLeft||K.ShiftRight?1:0}; },
-  botInput(i){ const p=G.players[i]; const tgt=WP[(p.cp+2)%N]; const desired=Math.atan2(tgt.z-p.z,tgt.x-p.x); let d=desired-p.a; while(d>Math.PI)d-=2*Math.PI; while(d<-Math.PI)d+=2*Math.PI;
+  botInput(i){ const p=G.players[i], wp=TRACKS[G.race].wp, N=wp.length; const tgt=wp[(p.cp+2)%N];
+    const des=Math.atan2(tgt.z-p.z,tgt.x-p.x); let d=des-p.a; while(d>Math.PI)d-=2*Math.PI; while(d<-Math.PI)d+=2*Math.PI;
     return {u:1,d:0,l:d<-0.08?1:0,r:d>0.08?1:0,da:(Math.abs(d)<0.3&&p.boost>0.25&&Math.random()<0.04)?1:0}; },
 
   step(dt,inputs){ if(G.ph!=="play")return snap();
-    if(G.countdown>0){ G.countdown-=dt; return snap(); }
     const act=G.players.map((p,i)=>p.active?i:-1).filter(i=>i>=0);
+    if(G.raceState==="inter"){ G.interT-=dt; if(G.interT<=0){ if(G.race+1>=TRACKS.length){ finishSeason(); } else loadRace(G.race+1); } return snap(); }
+    if(G.countdown>0){ G.countdown-=dt; return snap(); }
+    const T=TRACKS[G.race], wp=T.wp, N=wp.length;
     for(const i of act){ const p=G.players[i], inp=inputs[i]||IDLE; if(p.fin)continue;
-      const off=distToTrack(p.x,p.z); const onTrack=off.d<TRACKW;
+      const off=distToTrack(p.x,p.z,wp), onTrack=off.d<T.tw;
       let boosting=inp.da&&p.boost>0.04; if(boosting)p.boost=Math.max(0,p.boost-0.55*dt); else p.boost=Math.min(1,p.boost+0.12*dt);
       const maxf=(boosting?MAXB:MAXF)*(onTrack?1:0.45);
-      if(inp.u)p.spd+=ACC*dt; if(inp.d)p.spd-=ACC*1.3*dt;
-      if(!inp.u&&!inp.d)p.spd*=(1-1.0*dt);
-      if(!onTrack)p.spd*=(1-3.5*dt);
+      if(inp.u)p.spd+=ACC*dt; if(inp.d)p.spd-=ACC*1.3*dt; if(!inp.u&&!inp.d)p.spd*=(1-1.0*dt); if(!onTrack)p.spd*=(1-3.5*dt);
       p.spd=Math.max(-MAXR,Math.min(maxf,p.spd));
-      const steerEff=STEER*Math.max(-1,Math.min(1,p.spd/140));
-      p.a+=((inp.r?1:0)-(inp.l?1:0))*steerEff*dt;
+      p.a+=((inp.r?1:0)-(inp.l?1:0))*STEER*Math.max(-1,Math.min(1,p.spd/140))*dt;
       p.x+=Math.cos(p.a)*p.spd*dt; p.z+=Math.sin(p.a)*p.spd*dt;
       if(!onTrack){ p.x+=(off.px-p.x)*Math.min(1,2.2*dt); p.z+=(off.pz-p.z)*Math.min(1,2.2*dt); }
       p.x=Math.max(20,Math.min(W-20,p.x)); p.z=Math.max(20,Math.min(D-20,p.z));
-      // boost pad
-      for(const bi of BOOSTPADS){ const a=WP[bi],b=WP[(bi+1)%N]; const mx=(a.x+b.x)/2,mz=(a.z+b.z)/2; if(Math.hypot(p.x-mx,p.z-mz)<70){ p.spd=Math.max(p.spd,MAXB); p.boost=Math.min(1,p.boost+0.5*dt*4); } }
-      // checkpoint
-      const nt=WP[p.cp%N]; if(Math.hypot(p.x-nt.x,p.z-nt.z)<CPR){ p.cp++; if(p.cp%N===0){ sfx(500,0.12,"sine",0.06); RanchNet.toast("LAP "+(p.cp/N)+(p.cp/N>=LAPS?"":"/"+LAPS)); }
-        if(p.cp>=N*LAPS){ p.fin=1; if(G.w<0){ G.w=i; G.ph="win"; } } }
-      // car collisions (light)
+      const nt=wp[p.cp%N]; if(Math.hypot(p.x-nt.x,p.z-nt.z)<T.tw+18){ p.cp++;
+        if(p.cp%N===0){ sfx(500,0.12,"sine",0.06); if(Math.floor(p.cp/N)<LAPS&&i===info0(act))RanchNet.toast("LAP "+(p.cp/N+0)); }
+        if(p.cp>=N*LAPS){ p.fin=1; p.place=(G.players.filter(q=>q.active&&q.fin).length); if(i===actLeader(act))sfx(660,0.2,"sine",0.08); } }
       for(const j of act){ if(j===i)continue; const q=G.players[j]; const ex=q.x-p.x,ez=q.z-p.z,ed=Math.hypot(ex,ez); if(ed<32&&ed>0){ q.x+=ex/ed*1.5; q.z+=ez/ed*1.5; p.spd*=0.985; } }
     }
+    // race over when all finished (or leader finished + 12s)
+    const fin=act.filter(i=>G.players[i].fin).length;
+    if(fin>0&&!G.leaderT)G.leaderT=12;
+    if(G.leaderT){ G.leaderT-=dt; if(fin>=act.length||G.leaderT<=0)endRace(act); }
     G.time+=dt; return snap(); },
 
   ingest(){}, interp(a,b,t){ const ps=[]; for(let i=0;i<4;i++){ const pa=a.ps[i],pb=b.ps[i];
       ps.push(pb.ac?{ac:1,x:pa.x+(pb.x-pa.x)*t,z:pa.z+(pb.z-pa.z)*t,a:lerpA(pa.a,pb.a,t),cp:pb.cp,boost:pb.boost,fin:pb.fin}:{ac:0}); }
-    return {ph:b.ph,w:b.w,ps,time:b.time,countdown:b.countdown}; },
+    return {ph:b.ph,w:b.w,ps,time:b.time,countdown:b.countdown,race:b.race,raceState:b.raceState,points:b.points}; },
 
-  render(f,info){
+  render(f,info){ if(f.race!==cliRace){ buildTrack(f.race); cliRace=f.race; }
     for(let i=0;i<4;i++){ const p=f.ps[i], g=gP[i]; if(!p.ac){ g.visible=false; continue; } g.visible=true; g.position.set(p.x,0,p.z); g.rotation.y=-p.a; }
-    // standings
     const order=[]; for(let i=0;i<4;i++)if(f.ps[i].ac)order.push(i); order.sort((a,b)=>f.ps[b].cp-f.ps[a].cp);
-    const me=f.ps[info.myIdx]; const myLap=me&&me.ac?Math.min(LAPS,Math.floor(me.cp/N)+1):1; const myPos=order.indexOf(info.myIdx)+1;
-    const bar=document.getElementById("topBar"); let h='<span style="color:#9fe8ff">LAP '+myLap+'/'+LAPS+'</span><span style="color:#ffd166">P'+myPos+'/'+order.length+'</span>';
-    if(f.countdown>0)h+='<span style="color:#5aff8a">'+Math.ceil(f.countdown)+'</span>'; bar.innerHTML=h;
+    const me=f.ps[info.myIdx]; const myLap=me&&me.ac?Math.min(LAPS,Math.floor(me.cp/N(f))+1):1; const myPos=order.indexOf(info.myIdx)+1;
+    const T=TRACKS[f.race];
+    let h='<span style="color:'+T.acc+'">'+T.name+' · R'+(f.race+1)+'/'+TRACKS.length+'</span><span style="color:#9fe8ff">LAP '+myLap+'/'+LAPS+'</span><span style="color:#ffd166">P'+myPos+'</span>';
+    if(f.countdown>0)h+='<span style="color:#5aff8a">'+Math.ceil(f.countdown)+'</span>'; document.getElementById("topBar").innerHTML=h;
+    // standings sidebar via stagebar
+    const sb=document.querySelector(".stagebar")||makeStageBar();
+    const ord2=[0,1,2,3].filter(i=>f.ps[i].ac).sort((a,b)=>f.points[b]-f.points[a]);
+    sb.firstChild.innerHTML="CHAMPIONSHIP&nbsp; "+ord2.map(i=>'<span style="color:'+COLORS[i].css+'">'+f.points[i]+'</span>').join(" · ");
+    sb.style.display="block";
     const bo=me&&me.ac?Math.round(me.boost*100):0;
-    document.getElementById("botHud").innerHTML='<div style="background:rgba(8,12,26,.7);border:1px solid #232b52;border-radius:12px;padding:8px 16px;font-weight:800;color:#9fe8ff">BOOST '+bo+'% '+(me&&me.fin?"· FINISHED":"")+'</div>';
+    document.getElementById("botHud").innerHTML='<div style="background:rgba(8,12,26,.7);border:1px solid #232b52;border-radius:12px;padding:8px 16px;font-weight:800;color:#9fe8ff">BOOST '+bo+'% '+(me&&me.fin?"· FINISHED":"")+(f.raceState==="inter"?" · NEXT CIRCUIT…":"")+'</div>';
     R3.render(0.016); },
-  endText(f,myIdx){ return f.w===myIdx?"🏁 P1 — YOU WIN!":(COLORS[f.w]?COLORS[f.w].name+" TAKES THE CHECKERED":"RACE OVER"); },
+  endText(f,myIdx){ return f.w===myIdx?"🏆 SEASON CHAMPION — YOU WIN!":(COLORS[f.w]?COLORS[f.w].name+" TAKES THE TITLE":"SEASON OVER"); },
 };
+function makeStageBar(){ const d=document.createElement("div"); d.className="stagebar"; d.innerHTML="<span></span>"; document.body.appendChild(d); return d; }
+function N(f){ return TRACKS[f.race].wp.length; }
+function info0(act){ return act[0]; } function actLeader(act){ let b=act[0],bc=-1; for(const i of act){ if(G.players[i].cp>bc){bc=G.players[i].cp;b=i;} } return b; }
 function lerpA(a,b,t){ let d=b-a; while(d>Math.PI)d-=2*Math.PI; while(d<-Math.PI)d+=2*Math.PI; return a+d*t; }
-function snap(){ return { ph:G.ph,w:G.w,time:+G.time.toFixed(1),countdown:+Math.max(0,G.countdown).toFixed(2),
+function snap(){ return { ph:G.ph,w:G.w,time:+G.time.toFixed(1),countdown:+Math.max(0,G.countdown).toFixed(2),race:G.race,raceState:G.raceState,points:G.points.slice(),
   ps:G.players.map(p=>p.active?{ac:1,x:Math.round(p.x),z:Math.round(p.z),a:+p.a.toFixed(3),cp:p.cp,boost:+p.boost.toFixed(2),fin:p.fin}:{ac:0}) }; }
-function distToTrack(x,z){ let best=1e18,bx=x,bz=z; for(let i=0;i<N;i++){ const a=WP[i],b=WP[(i+1)%N]; const dx=b.x-a.x,dz=b.z-a.z,l2=dx*dx+dz*dz;
-    let t=l2?((x-a.x)*dx+(z-a.z)*dz)/l2:0; t=Math.max(0,Math.min(1,t)); const px=a.x+t*dx,pz=a.z+t*dz; const d=Math.hypot(x-px,z-pz); if(d<best){best=d;bx=px;bz=pz;} }
-  return {d:best,px:bx,pz:bz}; }
+function loadRace(r){ G.race=r; G.raceState="run"; G.countdown=3; G.time=0; G.leaderT=0;
+  const T=TRACKS[r], wp=T.wp, a0=wp[0], aPrev=wp[wp.length-1];
+  const sx=a0.x*0.4+aPrev.x*0.6, sz=a0.z*0.4+aPrev.z*0.6, tang=Math.atan2(a0.z-aPrev.z,a0.x-aPrev.x), nx=Math.cos(tang+Math.PI/2),nz=Math.sin(tang+Math.PI/2);
+  let k=0; for(let i=0;i<4;i++){ const p=G.players[i]; if(!p.active)continue; const off=(k-1.5)*34; k++; p.x=sx+nx*off; p.z=sz+nz*off; p.a=tang; p.spd=0; p.cp=0; p.boost=1; p.fin=0; p.place=0; }
+  RanchNet.toast("ROUND "+(r+1)+" — "+T.name); }
+function endRace(act){ // award points by place
+  const ranked=act.slice().sort((a,b)=>{ const pa=G.players[a],pb=G.players[b]; if(pa.fin!==pb.fin)return pb.fin-pa.fin; return pb.cp-pa.cp; });
+  ranked.forEach((i,idx)=>{ G.points[i]+=PTS[idx]||0; });
+  G.raceState="inter"; G.interT=4.0; G.leaderT=0;
+  RanchNet.toast(TRACKS[G.race].name+" DONE"); }
+function finishSeason(){ G.ph="win"; let bw=-1,bp=-1; for(let i=0;i<4;i++){ if(G.players[i].active&&G.points[i]>bp){bp=G.points[i];bw=i;} } G.w=bw; sfx(660,0.4,"sine",0.1); }
+function distToTrack(x,z,wp){ let best=1e18,bx=x,bz=z; for(let i=0;i<wp.length;i++){ const a=wp[i],b=wp[(i+1)%wp.length]; const dx=b.x-a.x,dz=b.z-a.z,l2=dx*dx+dz*dz;
+    let t=l2?((x-a.x)*dx+(z-a.z)*dz)/l2:0; t=Math.max(0,Math.min(1,t)); const px=a.x+t*dx,pz=a.z+t*dz; const d=Math.hypot(x-px,z-pz); if(d<best){best=d;bx=px;bz=pz;} } return {d:best,px:bx,pz:bz}; }
+function buildTrack(r){ const T=TRACKS[r], wp=T.wp; while(trackGroup.children.length)trackGroup.remove(trackGroup.children[0]);
+  R3.scene.background.setHex(T.bg); R3.fog.color.setHex(T.bg); floorMesh.material.color.setHex(T.grid);
+  const tmat=new THREE.MeshStandardMaterial({color:T.surf,roughness:0.9,metalness:0.05});
+  for(let i=0;i<wp.length;i++){ const a=wp[i],b=wp[(i+1)%wp.length]; const dx=b.x-a.x,dz=b.z-a.z,len=Math.hypot(dx,dz);
+    const seg=new THREE.Mesh(new THREE.BoxGeometry(len+10,2,T.tw*2),tmat); seg.position.set((a.x+b.x)/2,1.5,(a.z+b.z)/2); seg.rotation.y=-Math.atan2(dz,dx); trackGroup.add(seg);
+    for(const s of [1,-1]){ const e=new THREE.Mesh(new THREE.BoxGeometry(len+10,5,5),new THREE.MeshBasicMaterial({color:T.edge})); e.position.set((a.x+b.x)/2,4,(a.z+b.z)/2); e.rotation.y=-Math.atan2(dz,dx); e.translateZ(T.tw*s); trackGroup.add(e); } }
+  const sf=new THREE.Mesh(new THREE.BoxGeometry(8,3,T.tw*2),new THREE.MeshBasicMaterial({color:0xffffff})); sf.position.set(wp[0].x,3,wp[0].z); trackGroup.add(sf); }
 RanchNet.start(GAME);
 </script></body></html>
