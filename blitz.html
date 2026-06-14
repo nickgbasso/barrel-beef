@@ -1,0 +1,119 @@
+<!DOCTYPE html><html lang="en"><head>
+<meta charset="UTF-8"/><meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>BLITZ — team arena sport</title></head><body>
+<canvas id="cv"></canvas>
+<script src="https://unpkg.com/three@0.134.0/build/three.min.js"></script>
+<script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
+<script src="ranch.js"></script>
+<script>
+"use strict";
+/* BLITZ — futuristic team sport. Two teams, one ball, knock it into the enemy
+   goal. Boost to slam the ball or beat a rival to it. Auto-split into teams.
+   2–4 players + bots. First to 7. */
+const W=1120,D=720, PR=18, BALLR=15, GMZ=[D/2-100,D/2+100], TARGET=7, MATCH=180;
+const PSPD=290, BOOSTSPD=470, IDLE={u:0,d:0,l:0,r:0,da:0};
+const TCOL=[0x2ad1ff,0xff7a33];
+let R3,G=null, gP=[], gRing=[], ballMesh;
+
+function sfx(f,d,t,v){ const a=window.__AC; if(!a)return; const o=a.createOscillator(),g=a.createGain();
+  o.type=t||"square"; o.frequency.setValueAtTime(f,a.currentTime); o.frequency.exponentialRampToValueAtTime(Math.max(40,f*0.5),a.currentTime+d);
+  g.gain.setValueAtTime(v||0.05,a.currentTime); g.gain.exponentialRampToValueAtTime(0.0001,a.currentTime+d); o.connect(g).connect(a.destination); o.start(); o.stop(a.currentTime+d); }
+const K={}; addEventListener("keydown",e=>{ if(["ArrowUp","ArrowDown","ArrowLeft","ArrowRight"," "].includes(e.key))e.preventDefault(); K[e.code]=1; });
+addEventListener("keyup",e=>K[e.code]=0); addEventListener("blur",()=>{for(const k in K)K[k]=0;});
+
+const GAME={
+  id:"blitz", name:"BLITZ", tag:"team arena sport · 2–4", soloLabel:"SOLO vs BOTS", minStart:2,
+  startLabel:"KICKOFF", lobbyTitle:"TEAM SELECT", soloTitle:"SOLO MATCH", lobbySub:"add players — teams auto-split",
+  soloSub:"add bots — you vs them", waitText:"waiting for kickoff…", againText:"SPACE = NEXT MATCH",
+  homeHint:'<div class="keys"><div><b>W A S D</b> drive</div><div><b>SHIFT</b> boost</div></div>'+
+           '<div class="hint">Knock the ball into the enemy goal. Players are split into two teams (cyan vs orange). BOOST to slam the ball or check a rival off it — but your boost meter drains. Spacing and passing beat ball-chasing. First team to '+TARGET+'.</div>',
+
+  init(){ R3=Ranch3D(document.getElementById("cv"),{W,D,bg:0x06080f,hemiTop:0x6688ff,hemiBot:0x07080e,dirCol:0xdfe6ff,camH:1040,camZ:600,fov:55});
+    R3.floorGrid(0x0b1020,0x1d2748,0x12182e);
+    // center line + circle
+    const line=new THREE.Mesh(new THREE.BoxGeometry(3,2,D),new THREE.MeshBasicMaterial({color:0x33406e})); line.position.set(W/2,2,D/2); R3.scene.add(line);
+    const circ=new THREE.Mesh(new THREE.TorusGeometry(80,2,8,40),new THREE.MeshBasicMaterial({color:0x33406e})); circ.rotation.x=-Math.PI/2; circ.position.set(W/2,2,D/2); R3.scene.add(circ);
+    R3.walls(null,0x121a33,0x16294a,0x3a6fd6);
+    // goals
+    for(let s=0;s<2;s++){ const c=TCOL[s], gx=s===0?0:W;
+      const post=new THREE.Mesh(new THREE.BoxGeometry(10,70,GMZ[1]-GMZ[0]),new THREE.MeshStandardMaterial({color:c,emissive:c,emissiveIntensity:0.6})); post.position.set(gx,35,D/2); R3.scene.add(post);
+      const zone=new THREE.Mesh(new THREE.BoxGeometry(70,2,GMZ[1]-GMZ[0]),new THREE.MeshBasicMaterial({color:c,transparent:true,opacity:0.16})); zone.position.set(s===0?35:W-35,2,D/2); R3.scene.add(zone); }
+    for(let i=0;i<4;i++){ const c=COLORS[i].hex, g=new THREE.Group();
+      const body=new THREE.Mesh(new THREE.BoxGeometry(34,14,24),new THREE.MeshStandardMaterial({color:c,emissive:c,emissiveIntensity:0.4,roughness:0.4})); body.position.y=10; g.add(body);
+      const fin=new THREE.Mesh(new THREE.BoxGeometry(10,8,6),new THREE.MeshStandardMaterial({color:0xffffff})); fin.position.set(16,12,0); g.add(fin);
+      const ring=new THREE.Mesh(new THREE.TorusGeometry(20,2.4,8,24),new THREE.MeshBasicMaterial({color:0xffffff})); ring.rotation.x=-Math.PI/2; ring.position.y=2; g.add(ring);
+      g.visible=false; R3.scene.add(g); gP.push(g); gRing.push(ring); }
+    ballMesh=new THREE.Mesh(new THREE.SphereGeometry(BALLR,18,14),new THREE.MeshStandardMaterial({color:0xffffff,emissive:0xbfd4ff,emissiveIntensity:0.7,roughness:0.2})); ballMesh.position.set(W/2,BALLR,D/2); R3.scene.add(ballMesh);
+    (function idle(){ if(!G||G._idle)R3.idle(); requestAnimationFrame(idle); })();
+  },
+
+  buildState(meta){ G={ph:"play",w:-1,players:[],ball:{x:W/2,z:D/2,vx:0,vz:0},sa:0,sb:0,time:0,freeze:1.2,_idle:false};
+    let na=0,nb=0; for(let i=0;i<4;i++){ const a=meta.slots[i]&&(meta.slots[i].kind==="human"||meta.slots[i].kind==="bot"); const team=i%2;
+      const sx=team===0?W*0.3:W*0.7; G.players.push({x:sx,z:120+i*150%D,a:0,active:!!a,isBot:meta.slots[i]&&meta.slots[i].kind==="bot",team,boost:1,dashT:0}); }
+    reset(0); },
+  rematch(){ G.ph="play"; G.w=-1; G.sa=0; G.sb=0; G.time=0; reset(0); },
+  onStart(){ if(G)G._idle=false; }, snapshotPhase(){ return G?G.ph:"play"; },
+
+  input(){ return {u:K.KeyW||K.ArrowUp?1:0,d:K.KeyS||K.ArrowDown?1:0,l:K.KeyA||K.ArrowLeft?1:0,r:K.KeyD||K.ArrowRight?1:0,da:K.ShiftLeft||K.ShiftRight?1:0}; },
+  botInput(i){ const p=G.players[i], b=G.ball; const egx=p.team===0?W:0;
+    let mate=true; let bestD=(b.x-p.x)**2+(b.z-p.z)**2; for(let j=0;j<4;j++){ if(j===i||!G.players[j].active||G.players[j].team!==p.team)continue; if((b.x-G.players[j].x)**2+(b.z-G.players[j].z)**2<bestD)mate=false; }
+    let tx,tz,da=0; if(mate){ const ang=Math.atan2(b.z-D/2,b.x-egx); tx=b.x+Math.cos(ang)*46; tz=b.z+Math.sin(ang)*46; if(Math.hypot(b.x-p.x,b.z-p.z)<70&&p.boost>0.3&&Math.random()<0.1)da=1; }
+    else { const ogx=p.team===0?60:W-60; tx=(ogx*0.55+b.x*0.45); tz=(D/2*0.4+b.z*0.6); }
+    const dx=tx-p.x,dz=tz-p.z; return {u:dz<-8?1:0,d:dz>8?1:0,l:dx<-8?1:0,r:dx>8?1:0,da}; },
+
+  step(dt,inputs){ if(G.ph!=="play")return snap();
+    const act=G.players.map((p,i)=>p.active?i:-1).filter(i=>i>=0);
+    if(G.freeze>0){ G.freeze-=dt; for(const i of act)G.players[i].boost=Math.min(1,G.players[i].boost+0.3*dt); return snap(); }
+    for(const i of act){ const p=G.players[i], inp=inputs[i]||IDLE;
+      let mx=(inp.r?1:0)-(inp.l?1:0), mz=(inp.d?1:0)-(inp.u?1:0); const ml=Math.hypot(mx,mz)||1; mx/=ml; mz/=ml;
+      let boosting=inp.da&&p.boost>0.05; let spd=boosting?BOOSTSPD:PSPD;
+      if(boosting){ p.boost=Math.max(0,p.boost-dt*0.6); } else p.boost=Math.min(1,p.boost+dt*0.28);
+      if(mx||mz){ p.x+=mx*spd*dt; p.z+=mz*spd*dt; p.a=Math.atan2(mz,mx); p.bx=mx; p.bz=mz; p.boosting=boosting; }
+      else { p.boosting=false; }
+      p.x=Math.max(PR,Math.min(W-PR,p.x)); p.z=Math.max(PR,Math.min(D-PR,p.z));
+      // hit ball
+      const b=G.ball, dx=b.x-p.x,dz=b.z-p.z, d=Math.hypot(dx,dz);
+      if(d<PR+BALLR){ const nx=dx/(d||1),nz=dz/(d||1); b.x=p.x+nx*(PR+BALLR); b.z=p.z+nz*(PR+BALLR);
+        const power=(p.boosting?620:360); b.vx+=nx*power+(p.bx||0)*120; b.vz+=nz*power+(p.bz||0)*120; if(p.boosting){R3.boom(b.x,b.z,"#bfd4ff",26);sfx(220,0.12,"square",0.05);} }
+      // bump rivals
+      for(const j of act){ if(j===i)continue; const q=G.players[j]; const ex=q.x-p.x,ez=q.z-p.z,ed=Math.hypot(ex,ez);
+        if(ed<PR*2&&ed>0){ const push=p.boosting?5:1.5; q.x+=ex/ed*push; q.z+=ez/ed*push; } }
+    }
+    // ball physics
+    const b=G.ball; b.x+=b.vx*dt; b.z+=b.vz*dt; const fr=1-1.1*dt; b.vx*=fr; b.vz*=fr;
+    const sp=Math.hypot(b.vx,b.vz); if(sp>900){ b.vx=b.vx/sp*900; b.vz=b.vz/sp*900; }
+    if(b.z<BALLR){ b.z=BALLR; b.vz=Math.abs(b.vz); } if(b.z>D-BALLR){ b.z=D-BALLR; b.vz=-Math.abs(b.vz); }
+    const inMouth=(b.z>GMZ[0]&&b.z<GMZ[1]);
+    if(b.x<BALLR){ if(inMouth&&b.x<6){ goal(1); return snap(); } b.x=BALLR; b.vx=Math.abs(b.vx); }
+    if(b.x>W-BALLR){ if(inMouth&&b.x>W-6){ goal(0); return snap(); } b.x=W-BALLR; b.vx=-Math.abs(b.vx); }
+    G.time+=dt; if(G.time>=MATCH){ G.ph="win"; G.w=G.sa>=G.sb?0:1; }
+    return snap(); },
+
+  ingest(){}, interp(a,b,t){ const ps=[]; for(let i=0;i<4;i++){ const pa=a.ps[i],pb=b.ps[i];
+      ps.push(pb.ac?{ac:1,x:pa.x+(pb.x-pa.x)*t,z:pa.z+(pb.z-pa.z)*t,a:pb.a,team:pb.team,boost:pb.boost,bo:pb.bo}:{ac:0}); }
+    const ba=a.ball,bb=b.ball; return {ph:b.ph,w:b.w,ps,ball:{x:ba.x+(bb.x-ba.x)*t,z:ba.z+(bb.z-ba.z)*t},sa:b.sa,sb:b.sb,time:b.time}; },
+
+  render(f,info){
+    for(let i=0;i<4;i++){ const p=f.ps[i], g=gP[i]; if(!p.ac){ g.visible=false; continue; } g.visible=true;
+      g.position.set(p.x,0,p.z); g.rotation.y=-p.a; gRing[i].material.color.setHex(TCOL[p.team]); g.children[0].material.emissiveIntensity=p.bo?0.9:0.4; }
+    ballMesh.position.set(f.ball.x,BALLR,f.ball.z); ballMesh.rotation.x+=0.04; ballMesh.rotation.z+=0.03;
+    const me=f.ps[info.myIdx], myTeam=me&&me.ac?me.team:0;
+    const bar=document.getElementById("topBar");
+    bar.innerHTML='<span class="scp" style="color:'+css(TCOL[0])+'"><span class="dot" style="background:'+css(TCOL[0])+'"></span>'+f.sa+'</span>'+
+      '<span style="color:#8a93b8;font-size:12px">'+Math.max(0,Math.ceil(MATCH-f.time))+'s · to '+TARGET+'</span>'+
+      '<span class="scp" style="color:'+css(TCOL[1])+'"><span class="dot" style="background:'+css(TCOL[1])+'"></span>'+f.sb+'</span>';
+    const bo=me&&me.ac?Math.round(me.boost*100):0;
+    document.getElementById("botHud").innerHTML='<div style="background:rgba(8,12,26,.7);border:1px solid #232b52;border-radius:12px;padding:8px 16px;font-weight:800;color:'+css(TCOL[myTeam])+'">YOUR TEAM: '+(myTeam===0?"CYAN":"ORANGE")+' · BOOST '+bo+'%</div>';
+    R3.render(0.016); },
+  endText(f,myIdx){ const myTeam=myIdx%2; return f.w===myTeam?"YOUR TEAM WINS! 🏆":((f.w===0?"CYAN":"ORANGE")+" TEAM WINS"); },
+};
+function css(hex){ return "#"+hex.toString(16).padStart(6,"0"); }
+function snap(){ const b=G.ball; return { ph:G.ph,w:G.w,
+  ps:G.players.map(p=>p.active?{ac:1,x:Math.round(p.x),z:Math.round(p.z),a:+p.a.toFixed(2),team:p.team,boost:+p.boost.toFixed(2),bo:p.boosting?1:0}:{ac:0}),
+  ball:{x:Math.round(b.x),z:Math.round(b.z)}, sa:G.sa, sb:G.sb, time:+G.time.toFixed(1) }; }
+function goal(team){ if(team===0)G.sa++; else G.sb++; R3.boom(G.ball.x,G.ball.z,css(TCOL[team]),70); R3.setShake(16); sfx(660,0.3,"sine",0.1);
+  RanchNet.toast((team===0?"CYAN":"ORANGE")+" SCORES!"); if(G.sa>=TARGET||G.sb>=TARGET){ G.ph="win"; G.w=G.sa>=TARGET?0:1; } else reset(team); }
+function reset(scoredTeam){ G.ball={x:W/2,z:D/2,vx:0,vz:0}; G.freeze=1.1;
+  for(let i=0;i<4;i++){ const p=G.players[i]; if(!p.active)continue; const sx=p.team===0?W*0.3:W*0.7; p.x=sx; p.z=120+(i*170)%(D-160); p.boost=Math.max(p.boost,0.6); } }
+RanchNet.start(GAME);
+</script></body></html>

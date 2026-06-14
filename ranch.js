@@ -119,7 +119,7 @@ const RanchNet=(function(){
   let peer=null,conns={},hostConn=null,isHost=false,online=false,connected=false,myIdx=0;
   let slots=null, gameRunning=false, last=0, netAcc=0, fdt=0, curCode="";
   let inputs=[null,null,null,null];
-  let pingMs=0,lastPingSent=0,pingT0=0, wantAgain=false;
+  let pingMs=0,lastPingSent=0,pingT0=0, wantAgain=false, curPhase="play";
   const snap={prev:null,cur:null};
   const ICE={iceServers:[{urls:"stun:stun.l.google.com:19302"},{urls:"stun:stun1.l.google.com:19302"},
     {urls:"turn:openrelay.metered.ca:80",username:"openrelayproject",credential:"openrelayproject"},
@@ -208,7 +208,7 @@ const RanchNet=(function(){
 
   /* ---- match flow ---- */
   function beginMatch(){
-    inputs=[null,null,null,null]; snap.prev=snap.cur=null; wantAgain=false;
+    inputs=[null,null,null,null]; snap.prev=snap.cur=null; wantAgain=false; curPhase="play"; endShown=false;
     const meta={ slots:slots.map(s=>({kind:s.kind})), myIdx, isHost:(isHost||!online), online, colors:COLORS };
     if(isHost||!online) GAME.buildState(meta); GAME.onStart&&GAME.onStart(meta);
     $("overlay").classList.add("hidden"); $("topHud").classList.remove("hidden"); $("ping").classList.remove("hidden"); $("botHud").classList.remove("hidden");
@@ -237,7 +237,7 @@ const RanchNet=(function(){
     const rt=performance.now()-95; let t=(rt-a.rt)/((b.rt-a.rt)||1); t=Math.max(0,Math.min(1,t));
     return GAME.interp?GAME.interp(a,b,t):b; }
   let endShown=false;
-  function handleEnd(f){ const ph=f.ph||"play";
+  function handleEnd(f){ const ph=f.ph||"play"; curPhase=ph;
     if(ph!=="play"&&!endShown){ endShown=true; toast(GAME.endText?GAME.endText(f,myIdx):"GAME OVER");
       setTimeout(()=>{ if(GAME.snapshotPhase&&GAME.snapshotPhase()!=="play") toast((isHost||!online)?(GAME.againText||"SPACE = AGAIN"):"waiting for host…",true); },1500); }
     if(ph==="play"&&endShown){ endShown=false; }
@@ -255,7 +255,7 @@ const RanchNet=(function(){
   function event(text){ const e=$("evt"),t=$("evtTxt"); if(text){ t.textContent=text; e.classList.add("show"); } else e.classList.remove("show"); }
 
   function start(game){ GAME=game; buildDOM(game);
-    addEventListener("keydown",e=>{ if(e.code==="Space"||e.code==="Enter") wantAgain=true; });
+    addEventListener("keydown",e=>{ if((e.code==="Space"||e.code==="Enter")&&curPhase!=="play") wantAgain=true; });
     if(game.init) game.init();
     let AC=null; const ac=()=>{ if(!AC){try{AC=new (window.AudioContext||window.webkitAudioContext)()}catch(e){}} window.__AC=AC; };
     $("btnCreate").onclick=()=>{ ac(); myIdx=0; conns={}; showScreen("screenLobby"); startHost(); };

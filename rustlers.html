@@ -1,6 +1,6 @@
 <!DOCTYPE html><html lang="en"><head>
 <meta charset="UTF-8"/><meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-<title>RUSTLERS — PvPvE loot run</title></head><body>
+<title>PLUNDER — PvPvE treasure raid</title></head><body>
 <canvas id="cv"></canvas>
 <script src="https://unpkg.com/three@0.134.0/build/three.min.js"></script>
 <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
@@ -24,17 +24,18 @@ const K={}; addEventListener("keydown",e=>{ if(["ArrowUp","ArrowDown","ArrowLeft
 addEventListener("keyup",e=>K[e.code]=0); addEventListener("blur",()=>{for(const k in K)K[k]=0;});
 
 const GAME={
-  id:"rustlers", name:"RUSTLERS", tag:"PvPvE loot run · 2–4", soloLabel:"SOLO vs BOTS", minStart:2,
-  startLabel:"YEEHAW — GO", lobbyTitle:"THE STAKEOUT", soloTitle:"SOLO RUSTLE", lobbySub:"add bandits or wait for friends",
-  soloSub:"add bandit bots, then ride", waitText:"waiting for the boss to start…", againText:"SPACE = RIDE AGAIN",
-  homeHint:'<div class="keys"><div><b>W A S D</b> move</div><div><b>SHIFT</b> dash-bump</div></div>'+
-           '<div class="hint">Scoop loose gold, haul it to YOUR colored barn to bank it (carry up to 5, heavier = slower). The roaming BULL rams anyone holding loot and makes them drop it ALL. Dash into a rival to knock a nugget loose. First to bank '+TARGET+' wins.</div>',
+  id:"rustlers", name:"PLUNDER", tag:"PvPvE treasure raid · 2–4", soloLabel:"SOLO vs BOTS", minStart:2,
+  startLabel:"SET SAIL", lobbyTitle:"THE COVE", soloTitle:"SOLO RAID", lobbySub:"add pirates or wait for friends",
+  soloSub:"add pirate bots, then raid", waitText:"waiting for the captain to set sail…", againText:"SPACE = RAID AGAIN",
+  homeHint:'<div class="keys"><div><b>W A S D</b> move</div><div><b>SHIFT</b> dash-ram</div></div>'+
+           '<div class="hint">Scoop scattered treasure and haul it to YOUR ship to stash it (carry up to 5, heavier = slower). The roaming KRAKEN drags down anyone holding loot and makes them spill it ALL. Dash-ram a rival to shake a coin loose. First to stash '+TARGET+' plunder wins.</div>',
 
-  init(){ R3=Ranch3D(document.getElementById("cv"),{W,D,bg:0x140d06,hemiTop:0xffd9a0,hemiBot:0x1a1008,dirCol:0xfff0d8,camH:1080,camZ:640,fov:55});
-    R3.floorGrid(0x241a0f,0x6e4a1f,0x3a2710); R3.walls(OBS,0x3a2512,0x4a2408,0xd99036);
+  init(){ R3=Ranch3D(document.getElementById("cv"),{W,D,bg:0x04101c,hemiTop:0x6fb0d8,hemiBot:0x04101a,dirCol:0xcfe6ff,camH:1080,camZ:640,fov:55});
+    R3.floorGrid(0x07182a,0x1d527a,0x103352); R3.walls(OBS,0x223340,0x14242e,0x4a96c8);
     for(let i=0;i<4;i++){ const c=COLORS[i].hex, b=BARN[i];
       const zone=new THREE.Mesh(new THREE.BoxGeometry(b.w,2,b.d),new THREE.MeshBasicMaterial({color:c,transparent:true,opacity:0.16})); zone.position.set(b.x+b.w/2,2,b.z+b.d/2); R3.scene.add(zone);
-      const house=new THREE.Mesh(new THREE.BoxGeometry(64,46,64),new THREE.MeshStandardMaterial({color:0x5a3a1e,roughness:0.8})); house.position.set(b.x+b.w/2,23,b.z+b.d/2); R3.scene.add(house);
+      const house=new THREE.Mesh(new THREE.BoxGeometry(64,40,40),new THREE.MeshStandardMaterial({color:0x2e2014,roughness:0.85})); house.position.set(b.x+b.w/2,20,b.z+b.d/2); R3.scene.add(house);
+      const mast=new THREE.Mesh(new THREE.CylinderGeometry(2.5,2.5,70,8),new THREE.MeshStandardMaterial({color:0x4a3624})); mast.position.set(b.x+b.w/2,55,b.z+b.d/2); R3.scene.add(mast);
       const roof=new THREE.Mesh(new THREE.ConeGeometry(52,30,4),new THREE.MeshStandardMaterial({color:c,emissive:c,emissiveIntensity:0.4,roughness:0.5})); roof.rotation.y=Math.PI/4; roof.position.set(b.x+b.w/2,61,b.z+b.d/2); R3.scene.add(roof); }
     for(let i=0;i<4;i++){ const c=COLORS[i].hex, g=new THREE.Group();
       const m=new THREE.MeshStandardMaterial({color:c,emissive:c,emissiveIntensity:0.45,roughness:0.4});
@@ -46,11 +47,10 @@ const GAME={
       g.visible=false; R3.scene.add(g); gP.push(g); gCarry.push(stack); }
     for(let i=0;i<MAXLOOT+10;i++){ const m=new THREE.Mesh(new THREE.OctahedronGeometry(9,0),new THREE.MeshStandardMaterial({color:0xffd34d,emissive:0xffb000,emissiveIntensity:0.6,roughness:0.3,metalness:0.5})); m.visible=false; R3.scene.add(m); lootP.push(m); }
     beastMesh=new THREE.Group();
-    const bd=new THREE.Mesh(new THREE.BoxGeometry(46,34,64),new THREE.MeshStandardMaterial({color:0x2a221d,roughness:0.7})); bd.position.y=20; beastMesh.add(bd);
-    const hd=new THREE.Mesh(new THREE.BoxGeometry(30,26,26),new THREE.MeshStandardMaterial({color:0x352a22,roughness:0.7})); hd.position.set(0,22,34); beastMesh.add(hd);
-    for(const sx of [-14,14]){ const horn=new THREE.Mesh(new THREE.ConeGeometry(4,20,8),new THREE.MeshStandardMaterial({color:0xe8e2d0})); horn.rotation.x=Math.PI/2.6; horn.position.set(sx,30,40); beastMesh.add(horn); }
-    beastEye=new THREE.Mesh(new THREE.SphereGeometry(4,8,8),new THREE.MeshBasicMaterial({color:0xff2a2a})); beastEye.position.set(8,24,46); beastMesh.add(beastEye);
-    const eye2=new THREE.Mesh(new THREE.SphereGeometry(4,8,8),new THREE.MeshBasicMaterial({color:0xff2a2a})); eye2.position.set(-8,24,46); beastMesh.add(eye2);
+    const bd=new THREE.Mesh(new THREE.SphereGeometry(30,18,14),new THREE.MeshStandardMaterial({color:0x3a1f4a,emissive:0x240f33,emissiveIntensity:0.5,roughness:0.6})); bd.position.y=28; bd.scale.set(1,0.85,1.25); beastMesh.add(bd);
+    for(let t=0;t<7;t++){ const ang=t/7*Math.PI*2; const arm=new THREE.Mesh(new THREE.ConeGeometry(6,48,8),new THREE.MeshStandardMaterial({color:0x4a2a5e,roughness:0.6})); arm.position.set(Math.cos(ang)*24,10,Math.sin(ang)*24); arm.rotation.z=Math.cos(ang)*0.6; arm.rotation.x=Math.sin(ang)*0.6+Math.PI; beastMesh.add(arm); }
+    beastEye=new THREE.Mesh(new THREE.SphereGeometry(5,10,10),new THREE.MeshBasicMaterial({color:0xffd23f})); beastEye.position.set(10,32,24); beastMesh.add(beastEye);
+    const eye2=new THREE.Mesh(new THREE.SphereGeometry(5,10,10),new THREE.MeshBasicMaterial({color:0xffd23f})); eye2.position.set(-10,32,24); beastMesh.add(eye2);
     beastMesh.visible=false; R3.scene.add(beastMesh);
     (function idle(){ if(!G||G._idle)R3.idle(); requestAnimationFrame(idle); })();
   },
@@ -124,10 +124,10 @@ const GAME={
     // HUD
     const bar=document.getElementById("topBar"); let h="";
     for(let i=0;i<4;i++){ const p=f.ps[i]; if(!p.ac)continue; h+='<span class="scp'+(i===info.myIdx?" me":"")+'" style="color:'+COLORS[i].css+'"><span class="dot" style="background:'+COLORS[i].css+'"></span>'+p.score+'</span>'; }
-    h+='<span style="color:#8a93b8;font-size:12px">bank '+TARGET+'</span>'; bar.innerHTML=h;
-    const me=f.ps[info.myIdx]; document.getElementById("botHud").innerHTML='<div style="background:rgba(8,12,26,.7);border:1px solid #232b52;border-radius:12px;padding:8px 16px;font-weight:800;color:#ffd34d">CARRYING '+(me&&me.ac?me.carry:0)+'/'+CAP+' 🪙 · get it to your barn — mind the bull 🐂</div>';
+    h+='<span style="color:#8a93b8;font-size:12px">stash '+TARGET+'</span>'; bar.innerHTML=h;
+    const me=f.ps[info.myIdx]; document.getElementById("botHud").innerHTML='<div style="background:rgba(8,12,26,.7);border:1px solid #232b52;border-radius:12px;padding:8px 16px;font-weight:800;color:#ffd34d">HOLDING '+(me&&me.ac?me.carry:0)+'/'+CAP+' 🪙 · run it to your ship — mind the kraken 🐙</div>';
     R3.render(0.016); },
-  endText(f,myIdx){ return f.w===myIdx?"YOU'RE RICH — YOU WIN!":(COLORS[f.w]?COLORS[f.w].name+" CLEANED UP":"GAME OVER"); },
+  endText(f,myIdx){ return f.w===myIdx?"RICHEST PIRATE — YOU WIN!":(COLORS[f.w]?COLORS[f.w].name+" PLUNDERED MOST":"GAME OVER"); },
 };
 function snap(){ const bs=G.beast; return { ph:G.ph,w:G.w,
   ps:G.players.map(p=>p.active?{ac:1,x:Math.round(p.x),z:Math.round(p.z),a:+p.a.toFixed(2),carry:p.carry,stun:p.stun>0?1:0,score:p.score}:{ac:0}),

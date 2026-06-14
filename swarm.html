@@ -1,0 +1,156 @@
+<!DOCTYPE html><html lang="en"><head>
+<meta charset="UTF-8"/><meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>THE SWARM — co-op survival</title></head><body>
+<canvas id="cv"></canvas>
+<script src="https://unpkg.com/three@0.134.0/build/three.min.js"></script>
+<script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
+<script src="ranch.js"></script>
+<script>
+"use strict";
+/* THE SWARM — co-op wave survival. Defend the reactor from escalating waves of
+   bio-mechs. Grunts chase you, brutes batter the core, spitters snipe from range.
+   Drops give better guns. Hold out as long as you can. 1–4 players + bots. */
+const W=1240,D=780, CORE={x:W/2,z:D/2,r:46};
+const PSPD=270, PHP=100;
+const ETYPE={ grunt:{hp:18,spd:128,r:14,col:0xff5a5a,dmg:16,target:"player"},
+  brute:{hp:70,spd:70,r:24,col:0xb15cff,dmg:30,target:"core"},
+  spit:{hp:26,spd:96,r:15,col:0xffd23f,dmg:0,target:"range"} };
+const WEAP={ blaster:{cd:0.26,n:1,spr:0,spd:680,dmg:12,r:5,life:1.4,col:"#9fe8ff",label:"BLASTER"},
+  scatter:{cd:0.5,n:6,spr:0.16,spd:640,dmg:9,r:4,life:0.7,col:"#ffd166",label:"SCATTER"},
+  pulse:{cd:0.09,n:1,spr:0.05,spd:760,dmg:8,r:4,life:1.2,col:"#b39bff",label:"PULSE RIFLE"},
+  rail:{cd:0.7,n:1,spr:0,spd:1500,dmg:46,r:7,life:1.0,col:"#7CFFCB",label:"RAILGUN",pierce:true} };
+const WK=["blaster","scatter","pulse","rail"], IDLE={u:0,d:0,l:0,r:0,sh:0,mx:W/2,mz:D/2};
+let R3,G=null, gP=[], enP=[], buP=[], coreMesh, drops=[];
+
+function sfx(f,d,t,v){ const a=window.__AC; if(!a)return; const o=a.createOscillator(),g=a.createGain();
+  o.type=t||"square"; o.frequency.setValueAtTime(f,a.currentTime); o.frequency.exponentialRampToValueAtTime(Math.max(40,f*0.5),a.currentTime+d);
+  g.gain.setValueAtTime(v||0.05,a.currentTime); g.gain.exponentialRampToValueAtTime(0.0001,a.currentTime+d); o.connect(g).connect(a.destination); o.start(); o.stop(a.currentTime+d); }
+const K={}; let mouse={x:innerWidth/2,y:innerHeight/2};
+addEventListener("keydown",e=>{ if(["ArrowUp","ArrowDown","ArrowLeft","ArrowRight"," "].includes(e.key))e.preventDefault(); K[e.code]=1; if(e.code==="Space")K.shoot=1; });
+addEventListener("keyup",e=>{ K[e.code]=0; if(e.code==="Space")K.shoot=0; });
+addEventListener("mousemove",e=>{ mouse.x=e.clientX; mouse.y=e.clientY; });
+addEventListener("mousedown",e=>{ if(e.button===0)K.shoot=1; }); addEventListener("mouseup",e=>{ if(e.button===0)K.shoot=0; });
+addEventListener("blur",()=>{ for(const k in K)K[k]=0; });
+
+const GAME={
+  id:"theswarm", name:"THE SWARM", tag:"co-op wave survival · 1–4", soloLabel:"SOLO STAND", minStart:1,
+  startLabel:"DEPLOY", lobbyTitle:"BRIEFING", soloTitle:"SOLO STAND", lobbySub:"add troopers or wait for squad",
+  soloSub:"add AI troopers, then deploy", waitText:"waiting for the squad lead to deploy…", againText:"SPACE = REDEPLOY",
+  homeHint:'<div class="keys"><div><b>W A S D</b> move</div><div><b>MOUSE</b> aim</div><div><b>CLICK/SPACE</b> fire</div></div>'+
+           '<div class="hint">Defend the reactor at the center. Waves get bigger and meaner — grunts swarm you, brutes smash the core, spitters snipe. Killing enemies drops better weapons. If the core falls, it\'s over. How many waves can your squad survive?</div>',
+
+  init(){ R3=Ranch3D(document.getElementById("cv"),{W,D,bg:0x05080f,hemiTop:0x4a6cff,hemiBot:0x05060c,dirCol:0xcfe0ff,camH:1120,camZ:660,fov:55});
+    R3.floorGrid(0x0a0f1e,0x1c2747,0x121a30); R3.walls(null,0x141d3a,0x16344f,0x3f6fd6);
+    coreMesh=new THREE.Group();
+    const cc=new THREE.Mesh(new THREE.CylinderGeometry(CORE.r,CORE.r,28,24),new THREE.MeshStandardMaterial({color:0x18324f,emissive:0x29b6ff,emissiveIntensity:0.5,roughness:0.4})); cc.position.y=14; coreMesh.add(cc);
+    const ctop=new THREE.Mesh(new THREE.IcosahedronGeometry(22,0),new THREE.MeshStandardMaterial({color:0x9fe8ff,emissive:0x29b6ff,emissiveIntensity:0.9})); ctop.position.y=42; coreMesh.add(ctop); coreMesh.position.set(CORE.x,0,CORE.z); R3.scene.add(coreMesh);
+    for(let i=0;i<4;i++){ const c=COLORS[i].hex, g=new THREE.Group();
+      const m=new THREE.MeshStandardMaterial({color:c,emissive:c,emissiveIntensity:0.4,roughness:0.4});
+      const body=new THREE.Mesh(new THREE.CylinderGeometry(13,15,20,16),new THREE.MeshStandardMaterial({color:0x16203a,roughness:0.6})); body.position.y=10; g.add(body);
+      const ring=new THREE.Mesh(new THREE.TorusGeometry(15,2,8,18),m); ring.rotation.x=-Math.PI/2; ring.position.y=20; g.add(ring);
+      const gun=new THREE.Mesh(new THREE.BoxGeometry(24,5,5),m); gun.position.set(15,13,0); g.add(gun);
+      g.visible=false; R3.scene.add(g); gP.push(g); }
+    for(let i=0;i<70;i++){ const m=new THREE.Mesh(new THREE.IcosahedronGeometry(1,0),new THREE.MeshStandardMaterial({color:0xff5a5a,emissive:0xff2a2a,emissiveIntensity:0.5,roughness:0.5})); m.visible=false; R3.scene.add(m); enP.push(m); }
+    for(let i=0;i<160;i++){ const m=new THREE.Mesh(new THREE.SphereGeometry(1,8,8),new THREE.MeshBasicMaterial({color:0xffffff})); m.visible=false; R3.scene.add(m); buP.push(m); }
+    for(let i=0;i<8;i++){ const m=new THREE.Mesh(new THREE.BoxGeometry(18,18,18),new THREE.MeshStandardMaterial({color:0x7CFFCB,emissive:0x2bd49a,emissiveIntensity:0.7})); m.visible=false; R3.scene.add(m); drops.push(m); }
+    (function idle(){ if(!G||G._idle)R3.idle(); requestAnimationFrame(idle); })();
+  },
+
+  buildState(meta){ G={ph:"play",players:[],en:[],bu:[],drops:[],core:PHP*2.4,wave:0,score:0,spawnQ:0,spawnT:0,breakT:2.0,_idle:false};
+    const sp=[{x:W/2-80,z:D/2+120},{x:W/2+80,z:D/2+120},{x:W/2-80,z:D/2-120},{x:W/2+80,z:D/2-120}];
+    for(let i=0;i<4;i++){ const a=meta.slots[i]&&(meta.slots[i].kind==="human"||meta.slots[i].kind==="bot");
+      G.players.push({x:sp[i].x,z:sp[i].z,a:0,active:!!a,isBot:meta.slots[i]&&meta.slots[i].kind==="bot",hp:PHP,down:0,wpn:"blaster",ammo:Infinity,cd:0}); } },
+  rematch(){ G.ph="play"; G.wave=0; G.score=0; G.core=PHP*2.4; G.en=[]; G.bu=[]; G.drops=[]; G.breakT=2; for(const p of G.players){p.hp=PHP;p.down=0;p.wpn="blaster";p.ammo=Infinity;} },
+  onStart(){ if(G)G._idle=false; }, snapshotPhase(){ return G?G.ph:"play"; },
+
+  input(){ const g=R3.groundPoint(mouse); return {u:K.KeyW||K.ArrowUp?1:0,d:K.KeyS||K.ArrowDown?1:0,l:K.KeyA||K.ArrowLeft?1:0,r:K.KeyD||K.ArrowRight?1:0,sh:K.shoot?1:0,mx:g.x,mz:g.z}; },
+  botInput(i){ const p=G.players[i]; if(p.down>0)return IDLE; let e=null,bd=1e18; for(const en of G.en){ const d=(en.x-p.x)**2+(en.z-p.z)**2; if(d<bd){bd=d;e=en;} }
+    const inp={u:0,d:0,l:0,r:0,sh:0,mx:CORE.x,mz:CORE.z};
+    // hold a ring around the core
+    const ca=Math.atan2(p.z-CORE.z,p.x-CORE.x), rr=Math.hypot(p.x-CORE.x,p.z-CORE.z);
+    let tx=CORE.x+Math.cos(ca)*120, tz=CORE.z+Math.sin(ca)*120;
+    if(e&&Math.sqrt(bd)<150){ tx=p.x-(e.x-p.x); tz=p.z-(e.z-p.z); } // back off
+    const dx=tx-p.x,dz=tz-p.z; inp.r=dx>8?1:0;inp.l=dx<-8?1:0;inp.d=dz>8?1:0;inp.u=dz<-8?1:0;
+    if(e){ inp.mx=e.x; inp.mz=e.z; inp.sh=1; } return inp; },
+
+  step(dt,inputs){ if(G.ph!=="play")return snap();
+    const act=G.players.map((p,i)=>p.active?i:-1).filter(i=>i>=0);
+    // wave control
+    if(G.en.length===0&&G.spawnQ===0){ if(G.breakT>0){G.breakT-=dt;} else { G.wave++; const n=5+G.wave*3; G.spawnQ=n; G.spawnT=0; RanchNet.toast("WAVE "+G.wave); sfx(300,0.3,"sawtooth",0.07); } }
+    if(G.spawnQ>0){ G.spawnT-=dt; if(G.spawnT<=0){ spawnEnemy(); G.spawnQ--; G.spawnT=0.35; if(G.spawnQ===0)G.breakT=3.0; } }
+    // players
+    for(const i of act){ const p=G.players[i], inp=inputs[i]||IDLE;
+      if(p.down>0){ p.down-=dt; if(p.down<=0){ p.hp=PHP; p.x=CORE.x+(Math.random()-0.5)*80; p.z=CORE.z+(Math.random()-0.5)*80; } continue; }
+      let mx=(inp.r?1:0)-(inp.l?1:0), mz=(inp.d?1:0)-(inp.u?1:0); const ml=Math.hypot(mx,mz)||1;
+      if(mx||mz){ p.x+=mx/ml*PSPD*dt; p.z+=mz/ml*PSPD*dt; } p.a=Math.atan2(inp.mz-p.z,inp.mx-p.x);
+      p.x=Math.max(14,Math.min(W-14,p.x)); p.z=Math.max(14,Math.min(D-14,p.z));
+      const dc=Math.hypot(p.x-CORE.x,p.z-CORE.z); if(dc<CORE.r+14){ const a=Math.atan2(p.z-CORE.z,p.x-CORE.x); p.x=CORE.x+Math.cos(a)*(CORE.r+14); p.z=CORE.z+Math.sin(a)*(CORE.r+14); }
+      p.cd-=dt; const wp=WEAP[p.wpn];
+      if(inp.sh&&p.cd<=0){ p.cd=wp.cd; for(let k=0;k<wp.n;k++){ const a=p.a+(wp.n>1?(k-(wp.n-1)/2):0)*wp.spr+(Math.random()-0.5)*wp.spr*0.5;
+        G.bu.push({x:p.x+Math.cos(p.a)*16,z:p.z+Math.sin(p.a)*16,vx:Math.cos(a)*wp.spd,vz:Math.sin(a)*wp.spd,life:wp.life,dmg:wp.dmg,r:wp.r,enemy:false,col:wp.col,pierce:wp.pierce}); }
+        sfx(wp===WEAP.rail?180:560,0.05,"square",0.04); if(p.wpn!=="blaster"){ p.ammo--; if(p.ammo<=0){p.wpn="blaster";p.ammo=Infinity;} } }
+      // pick drops
+      for(let k=G.drops.length-1;k>=0;k--){ const d=G.drops[k]; if(Math.hypot(d.x-p.x,d.z-p.z)<22){ if(d.kind==="heal")p.hp=Math.min(PHP,p.hp+45); else {p.wpn=d.kind;p.ammo=d.ammo;} G.drops.splice(k,1); sfx(880,0.1,"triangle",0.07); } }
+    }
+    // enemies
+    for(let k=G.en.length-1;k>=0;k--){ const e=G.en[k], t=ETYPE[e.t];
+      let tx,tz;
+      if(t.target==="core"){ tx=CORE.x; tz=CORE.z; }
+      else { let pl=nearestPlayer(e.x,e.z); if(pl){ tx=pl.x; tz=pl.z; } else { tx=CORE.x; tz=CORE.z; } }
+      const ang=Math.atan2(tz-e.z,tx-e.x); const dist=Math.hypot(tx-e.x,tz-e.z);
+      if(t.target==="range"){ // spitter keeps distance & shoots
+        if(dist>260){ e.x+=Math.cos(ang)*t.spd*dt; e.z+=Math.sin(ang)*t.spd*dt; } else if(dist<200){ e.x-=Math.cos(ang)*t.spd*dt; e.z-=Math.sin(ang)*t.spd*dt; }
+        e.sc-=dt; if(e.sc<=0){ e.sc=1.6; const pl=nearestPlayer(e.x,e.z); if(pl){ const a=Math.atan2(pl.z-e.z,pl.x-e.x); G.bu.push({x:e.x,z:e.z,vx:Math.cos(a)*360,vz:Math.sin(a)*360,life:2.2,dmg:14,r:7,enemy:true,col:"#ffd23f"}); } } }
+      else { e.x+=Math.cos(ang)*t.spd*dt; e.z+=Math.sin(ang)*t.spd*dt; }
+      e.a=ang;
+      // hit core
+      if(Math.hypot(e.x-CORE.x,e.z-CORE.z)<CORE.r+t.r){ G.core-=t.dmg; R3.boom(e.x,e.z,"#29b6ff",40); sfx(120,0.2,"sawtooth",0.08); G.en.splice(k,1); if(G.core<=0){G.ph="over";} continue; }
+      // hit player (grunts)
+      if(t.dmg>0&&t.target!=="core"){ const pl=nearestPlayer(e.x,e.z); if(pl&&Math.hypot(pl.x-e.x,pl.z-e.z)<t.r+13){ hurt(pl,t.dmg*dt*3.2); } }
+    }
+    // bullets
+    for(let k=G.bu.length-1;k>=0;k--){ const b=G.bu[k]; b.x+=b.vx*dt; b.z+=b.vz*dt; b.life-=dt;
+      if(b.life<=0||b.x<0||b.x>W||b.z<0||b.z>D){ G.bu.splice(k,1); continue; }
+      if(b.enemy){ for(const i of act){ const p=G.players[i]; if(p.down>0)continue; if(Math.hypot(p.x-b.x,p.z-b.z)<14+b.r){ hurt(p,b.dmg); G.bu.splice(k,1); break; } } }
+      else { let hit=false; for(let j=G.en.length-1;j>=0;j--){ const e=G.en[j]; if(Math.hypot(e.x-b.x,e.z-b.z)<ETYPE[e.t].r+b.r){ e.hp-=b.dmg; R3.boom(b.x,b.z,b.col,14);
+        if(e.hp<=0){ G.en.splice(j,1); G.score+=ETYPE[e.t].pts||10; maybeDrop(e.x,e.z); R3.boom(e.x,e.z,"#ff8a5a",36); sfx(200,0.12,"square",0.05); }
+        if(!b.pierce){hit=true;break;} } } if(hit)G.bu.splice(k,1); }
+    }
+    return snap(); },
+
+  ingest(){}, interp(a,b,t){ const ps=[]; for(let i=0;i<4;i++){ const pa=a.ps[i],pb=b.ps[i];
+      ps.push(pb.ac?{ac:1,x:pa.x+(pb.x-pa.x)*t,z:pa.z+(pb.z-pa.z)*t,a:pb.a,hp:pb.hp,down:pb.down,wpn:pb.wpn}:{ac:0}); }
+    return {ph:b.ph,ps,en:b.en,bu:b.bu,drops:b.drops,core:b.core,wave:b.wave,score:b.score}; },
+
+  render(f,info){
+    for(let i=0;i<4;i++){ const p=f.ps[i], g=gP[i]; if(!p.ac){ g.visible=false; continue; } g.visible=true;
+      g.position.set(p.x,p.down?-30:0,p.z); g.rotation.y=-p.a; }
+    let ei=0; for(const e of f.en){ if(ei>=enP.length)break; const m=enP[ei++]; const t=ETYPE[e.t]; m.visible=true; m.position.set(e.x,t.r,e.z); m.scale.setScalar(t.r); m.material.color.setHex(t.col); m.material.emissive.setHex(t.col); m.rotation.y+=0.05; }
+    for(;ei<enP.length;ei++)enP[ei].visible=false;
+    let bi=0; for(const b of f.bu){ if(bi>=buP.length)break; const m=buP[bi++]; m.visible=true; m.position.set(b.x,12,b.z); m.scale.setScalar(b.r); m.material.color.set(b.enemy?"#ffd23f":b.col); }
+    for(;bi<buP.length;bi++)buP[bi].visible=false;
+    let di=0; for(const d of f.drops){ if(di>=drops.length)break; const m=drops[di++]; m.visible=true; m.position.set(d.x,14+Math.sin(performance.now()/300)*3,d.z); m.rotation.y+=0.05; m.material.color.set(d.kind==="heal"?"#5aff8a":"#7CFFCB"); m.material.emissive.set(d.kind==="heal"?"#2bd46a":"#2bd49a"); }
+    for(;di<drops.length;di++)drops[di].visible=false;
+    const ct=Math.max(0,f.core)/(PHP*2.4); coreMesh.children[1].material.emissiveIntensity=0.4+ct*0.6; coreMesh.scale.setScalar(0.7+ct*0.3);
+    const bar=document.getElementById("topBar");
+    bar.innerHTML='<span style="color:#9fe8ff">WAVE '+f.wave+'</span>'+
+      '<span style="color:'+(ct<0.3?"#ff6b6b":"#5aff8a")+'">⬢ CORE '+Math.max(0,Math.ceil(f.core))+'</span>'+
+      '<span style="color:#ffd166">SCORE '+f.score+'</span>';
+    const me=f.ps[info.myIdx]; const hp=me&&me.ac?Math.max(0,Math.ceil(me.hp)):0;
+    document.getElementById("botHud").innerHTML='<div style="background:rgba(8,12,26,.7);border:1px solid #232b52;border-radius:12px;padding:8px 16px;font-weight:800;color:'+(hp<30?"#ff6b6b":"#9fe8ff")+'">'+(me&&me.down?"REVIVING…":("HP "+hp+" · "+(WEAP[me?me.wpn:"blaster"]).label))+'</div>';
+    R3.render(0.016); },
+  endText(f){ return "CORE LOST — REACHED WAVE "+f.wave+" · SCORE "+f.score; },
+};
+function snap(){ return { ph:G.ph, ps:G.players.map(p=>p.active?{ac:1,x:Math.round(p.x),z:Math.round(p.z),a:+p.a.toFixed(2),hp:Math.round(p.hp),down:p.down>0?1:0,wpn:p.wpn}:{ac:0}),
+  en:G.en.map(e=>({x:Math.round(e.x),z:Math.round(e.z),a:+e.a.toFixed(2),t:e.t})), bu:G.bu.map(b=>({x:Math.round(b.x),z:Math.round(b.z),r:b.r,enemy:b.enemy?1:0,col:b.col})),
+  drops:G.drops.map(d=>({x:Math.round(d.x),z:Math.round(d.z),kind:d.kind})), core:Math.round(G.core), wave:G.wave, score:G.score }; }
+function spawnEnemy(){ const edge=Math.floor(Math.random()*4); let x,z;
+  if(edge===0){x=Math.random()*W;z=10;} else if(edge===1){x=Math.random()*W;z=D-10;} else if(edge===2){x=10;z=Math.random()*D;} else {x=W-10;z=Math.random()*D;}
+  let t="grunt"; const r=Math.random(); if(G.wave>=2&&r<0.22)t="brute"; else if(G.wave>=3&&r<0.42)t="spit";
+  const e={x,z,a:0,t,hp:ETYPE[t].hp*(1+G.wave*0.06),sc:Math.random()*1.5}; G.en.push(e); }
+function nearestPlayer(x,z){ let pl=null,bd=1e18; for(const p of G.players){ if(!p.active||p.down>0)continue; const d=(p.x-x)**2+(p.z-z)**2; if(d<bd){bd=d;pl=p;} } return pl; }
+function hurt(p,dmg){ p.hp-=dmg; if(p.hp<=0&&p.down<=0){ p.down=4.5; p.hp=0; sfx(90,0.3,"sawtooth",0.08); } }
+function maybeDrop(x,z){ const r=Math.random(); if(r<0.10)G.drops.push({x,z,kind:"scatter",ammo:6}); else if(r<0.18)G.drops.push({x,z,kind:"pulse",ammo:90}); else if(r<0.24)G.drops.push({x,z,kind:"rail",ammo:8}); else if(r<0.33)G.drops.push({x,z,kind:"heal"}); }
+ETYPE.grunt.pts=10; ETYPE.brute.pts=30; ETYPE.spit.pts=20;
+RanchNet.start(GAME);
+</script></body></html>

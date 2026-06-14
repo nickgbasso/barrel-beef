@@ -1,0 +1,151 @@
+<!DOCTYPE html><html lang="en"><head>
+<meta charset="UTF-8"/><meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>DEMOLITION — bomb tactics</title></head><body>
+<canvas id="cv"></canvas>
+<script src="https://unpkg.com/three@0.134.0/build/three.min.js"></script>
+<script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
+<script src="ranch.js"></script>
+<script>
+"use strict";
+/* DEMOLITION — grid bomb tactics. Blow up crates for power-ups, trap rivals in
+   your blasts. Last one standing takes the round; first to 3 rounds wins.
+   2–4 players + bots. */
+const GX=15, GZ=11, CELL=72, W=GX*CELL, D=GZ*CELL, PRAD=22;
+const FUSE=2.3, FLAME=0.5, WINROUNDS=3;
+const CORNER=[[1,1],[GX-2,GZ-2],[GX-2,1],[1,GZ-2]];
+const IDLE={u:0,d:0,l:0,r:0,bomb:0};
+let R3,G=null, gP=[], crateP=[], bombP=[], flameP=[], pupP=[];
+
+function sfx(f,d,t,v){ const a=window.__AC; if(!a)return; const o=a.createOscillator(),g=a.createGain();
+  o.type=t||"square"; o.frequency.setValueAtTime(f,a.currentTime); o.frequency.exponentialRampToValueAtTime(Math.max(40,f*0.5),a.currentTime+d);
+  g.gain.setValueAtTime(v||0.05,a.currentTime); g.gain.exponentialRampToValueAtTime(0.0001,a.currentTime+d); o.connect(g).connect(a.destination); o.start(); o.stop(a.currentTime+d); }
+const K={}; addEventListener("keydown",e=>{ if(["ArrowUp","ArrowDown","ArrowLeft","ArrowRight"," "].includes(e.key))e.preventDefault(); K[e.code]=1; if(e.code==="Space")K.bomb=1; });
+addEventListener("keyup",e=>{ K[e.code]=0; if(e.code==="Space")K.bomb=0; }); addEventListener("blur",()=>{for(const k in K)K[k]=0;});
+
+const wc=(c)=>c*CELL+CELL/2, cellOf=(x,z)=>Math.floor(x/CELL)+","+Math.floor(z/CELL);
+const inb=(cx,cz)=>cx>=0&&cz>=0&&cx<GX&&cz<GZ;
+function isSolidCell(cx,cz){ return cx===0||cz===0||cx===GX-1||cz===GZ-1||(cx%2===0&&cz%2===0); }
+
+const GAME={
+  id:"demolition", name:"DEMOLITION", tag:"bomb tactics · 2–4", soloLabel:"SOLO vs BOTS", minStart:2,
+  startLabel:"ARM BOMBS", lobbyTitle:"THE YARD", soloTitle:"SOLO BOMBS", lobbySub:"add demo crew or wait for friends",
+  soloSub:"add bot bombers, then arm", waitText:"waiting for host to arm bombs…", againText:"SPACE = NEXT MATCH",
+  homeHint:'<div class="keys"><div><b>W A S D</b> move</div><div><b>SPACE</b> drop bomb</div></div>'+
+           '<div class="hint">Drop bombs to blast crates (for power-ups: extra bombs, longer range, more speed) and to trap rivals. Blasts travel in a cross and chain off other bombs — don\'t blow yourself up. Last bomber standing wins the round. First to '+WINROUNDS+' rounds wins.</div>',
+
+  init(){ R3=Ranch3D(document.getElementById("cv"),{W,D,bg:0x0c0c10,hemiTop:0xb9c2d6,hemiBot:0x0c0c12,dirCol:0xffffff,camH:1180,camZ:560,fov:54});
+    R3.floorGrid(0x171922,0x2a2e3c,0x1c1f29);
+    // solid walls (static)
+    const wallMat=new THREE.MeshStandardMaterial({color:0x3a4150,roughness:0.7,metalness:0.3,emissive:0x10141c,emissiveIntensity:0.3});
+    for(let cz=0;cz<GZ;cz++)for(let cx=0;cx<GX;cx++){ if(isSolidCell(cx,cz)){ const m=new THREE.Mesh(new THREE.BoxGeometry(CELL,52,CELL),wallMat); m.position.set(wc(cx),26,wc(cz)); R3.scene.add(m);
+      const e=new THREE.LineSegments(new THREE.EdgesGeometry(m.geometry),new THREE.LineBasicMaterial({color:0x5b6480,transparent:true,opacity:0.4})); e.position.copy(m.position); R3.scene.add(e); } }
+    for(let i=0;i<140;i++){ const m=new THREE.Mesh(new THREE.BoxGeometry(CELL-8,44,CELL-8),new THREE.MeshStandardMaterial({color:0xb9742f,roughness:0.85,emissive:0x3a1e08,emissiveIntensity:0.3})); m.visible=false; R3.scene.add(m); crateP.push(m); }
+    for(let i=0;i<24;i++){ const m=new THREE.Mesh(new THREE.SphereGeometry(20,16,14),new THREE.MeshStandardMaterial({color:0x222,emissive:0xff3030,emissiveIntensity:0.4,roughness:0.4})); m.visible=false; R3.scene.add(m); bombP.push(m); }
+    for(let i=0;i<120;i++){ const m=new THREE.Mesh(new THREE.BoxGeometry(CELL-6,40,CELL-6),new THREE.MeshBasicMaterial({color:0xff8a1e,transparent:true,opacity:0.75})); m.visible=false; R3.scene.add(m); flameP.push(m); }
+    for(let i=0;i<24;i++){ const m=new THREE.Mesh(new THREE.IcosahedronGeometry(16,0),new THREE.MeshStandardMaterial({color:0x4cc9f0,emissive:0x2aa0d0,emissiveIntensity:0.7})); m.visible=false; R3.scene.add(m); pupP.push(m); }
+    for(let i=0;i<4;i++){ const c=COLORS[i].hex, g=new THREE.Group();
+      const body=new THREE.Mesh(new THREE.BoxGeometry(30,26,30),new THREE.MeshStandardMaterial({color:c,emissive:c,emissiveIntensity:0.4,roughness:0.45})); body.position.y=16; g.add(body);
+      const eye=new THREE.Mesh(new THREE.BoxGeometry(10,8,4),new THREE.MeshStandardMaterial({color:0x0c0c12})); eye.position.set(0,20,15); g.add(eye);
+      g.visible=false; R3.scene.add(g); gP.push(g); }
+    (function idle(){ if(!G||G._idle)R3.idle(); requestAnimationFrame(idle); })();
+  },
+
+  buildState(meta){ G={ph:"play",w:-1,players:[],grid:[],bombs:[],flames:[],pups:[],roundState:"play",restartT:0,_idle:false};
+    for(let i=0;i<4;i++){ const a=meta.slots[i]&&(meta.slots[i].kind==="human"||meta.slots[i].kind==="bot");
+      G.players.push({x:wc(CORNER[i][0]),z:wc(CORNER[i][1]),active:!!a,isBot:meta.slots[i]&&meta.slots[i].kind==="bot",alive:true,mb:1,rg:2,spd:0,wins:0,botT:0}); }
+    newRound(); },
+  rematch(){ G.ph="play"; G.w=-1; for(const p of G.players){p.wins=0;} newRound(); },
+  onStart(){ if(G)G._idle=false; }, snapshotPhase(){ return G?G.ph:"play"; },
+
+  input(){ return {u:K.KeyW||K.ArrowUp?1:0,d:K.KeyS||K.ArrowDown?1:0,l:K.KeyA||K.ArrowLeft?1:0,r:K.KeyD||K.ArrowRight?1:0,bomb:K.bomb?1:0}; },
+  botInput(i){ const p=G.players[i]; if(!p.alive)return IDLE; const cx=Math.floor(p.x/CELL),cz=Math.floor(p.z/CELL);
+    const danger=dangerSet();
+    const dirs=[[1,0,"r"],[-1,0,"l"],[0,1,"d"],[0,-1,"u"]];
+    if(danger.has(cx+","+cz)){ // flee to safe neighbor
+      for(const[dx,dz,key]of shuffle(dirs)){ const nx=cx+dx,nz=cz+dz; if(inb(nx,nz)&&!blockCell(nx,nz)&&!danger.has(nx+","+nz)){ const o={u:0,d:0,l:0,r:0,bomb:0}; o[key]=1; return o; } }
+      return IDLE;
+    }
+    // target nearest enemy
+    let e=null,bd=1e9; for(let j=0;j<4;j++){ if(j===i||!G.players[j].active||!G.players[j].alive)continue; const d=Math.abs(G.players[j].x-p.x)+Math.abs(G.players[j].z-p.z); if(d<bd){bd=d;e=G.players[j];} }
+    const o={u:0,d:0,l:0,r:0,bomb:0};
+    if(e){ const dx=e.x-p.x,dz=e.z-p.z;
+      if(Math.abs(dx)>Math.abs(dz)){ if(dx>10&&!blockCell(cx+1,cz))o.r=1; else if(dx<-10&&!blockCell(cx-1,cz))o.l=1; else if(dz>0&&!blockCell(cx,cz+1))o.d=1; else if(!blockCell(cx,cz-1))o.u=1; }
+      else { if(dz>10&&!blockCell(cx,cz+1))o.d=1; else if(dz<-10&&!blockCell(cx,cz-1))o.u=1; else if(dx>0&&!blockCell(cx+1,cz))o.r=1; else if(!blockCell(cx-1,cz))o.l=1; } }
+    // bomb if next to crate/enemy and an escape exists
+    const nearCrate=dirs.some(([dx,dz])=>inb(cx+dx,cz+dz)&&G.grid[(cz+dz)*GX+cx+dx]===2);
+    const nearEnemy=e&&Math.abs(e.x-p.x)+Math.abs(e.z-p.z)<CELL*1.6;
+    const escape=dirs.some(([dx,dz])=>inb(cx+dx,cz+dz)&&!blockCell(cx+dx,cz+dz));
+    if((nearCrate||nearEnemy)&&escape&&p.botT<=0&&G.bombs.filter(b=>b.owner===i).length<p.mb){ o.bomb=1; p.botT=1.2; }
+    if(p.botT>0)p.botT-=1/30;
+    return o; },
+
+  step(dt,inputs){ if(G.ph!=="play")return snap();
+    const act=G.players.map((p,i)=>p.active?i:-1).filter(i=>i>=0);
+    if(G.roundState==="end"){ G.restartT-=dt; if(G.restartT<=0)newRound(); return snap(); }
+    for(const i of act){ const p=G.players[i], inp=inputs[i]||IDLE; if(!p.alive)continue;
+      const spd=210+p.spd*42; let dx=((inp.r?1:0)-(inp.l?1:0)), dz=((inp.d?1:0)-(inp.u?1:0)); const ml=Math.hypot(dx,dz)||1; dx/=ml;dz/=ml;
+      tryMove(p,dx*spd*dt,dz*spd*dt);
+      // drop bomb
+      if(inp.bomb){ const cx=Math.floor(p.x/CELL),cz=Math.floor(p.z/CELL);
+        if(G.bombs.filter(b=>b.owner===i).length<p.mb && !G.bombs.some(b=>b.cx===cx&&b.cz===cz) && G.grid[cz*GX+cx]===0){ G.bombs.push({cx,cz,owner:i,t:FUSE,range:p.rg}); sfx(160,0.08,"square",0.04); } }
+      // pick pups
+      for(let k=G.pups.length-1;k>=0;k--){ const u=G.pups[k]; if(Math.floor(p.x/CELL)===u.cx&&Math.floor(p.z/CELL)===u.cz){ if(u.k==="bomb")p.mb++; else if(u.k==="range")p.rg++; else p.spd=Math.min(5,p.spd+1); G.pups.splice(k,1); sfx(880,0.1,"triangle",0.06); } }
+    }
+    // bombs
+    let boom=[]; for(const b of G.bombs){ b.t-=dt; if(b.t<=0)boom.push(b); }
+    while(boom.length){ const b=boom.pop(); if(b.done)continue; b.done=true; const cells=blastCells(b);
+      R3.boom(wc(b.cx),wc(b.cz),"#ff8a1e",50); sfx(90,0.3,"sawtooth",0.09);
+      for(const c of cells){ const id=c.cz*GX+c.cx; if(G.grid[id]===2){ G.grid[id]=0; maybePup(c.cx,c.cz); }
+        G.flames.push({cx:c.cx,cz:c.cz,life:FLAME}); for(const ob of G.bombs){ if(!ob.done&&ob.cx===c.cx&&ob.cz===c.cz){ ob.t=0; boom.push(ob); } } } }
+    G.bombs=G.bombs.filter(b=>!b.done);
+    const fset=new Set(); for(const f of G.flames){ f.life-=dt; fset.add(f.cx+","+f.cz); } G.flames=G.flames.filter(f=>f.life>0);
+    for(const i of act){ const p=G.players[i]; if(!p.alive)continue; if(fset.has(Math.floor(p.x/CELL)+","+Math.floor(p.z/CELL))){ p.alive=false; R3.boom(p.x,p.z,COLORS[i].css,55); sfx(70,0.4,"sawtooth",0.09); } }
+    // round end
+    const alive=act.filter(i=>G.players[i].alive);
+    if(alive.length<=1 && act.length>=2){ G.roundState="end"; G.restartT=2.6;
+      if(alive.length===1){ const w=alive[0]; G.players[w].wins++; RanchNet.toast(COLORS[w].name+" TAKES IT"); if(G.players[w].wins>=WINROUNDS){ G.ph="win"; G.w=w; } }
+      else RanchNet.toast("DRAW ROUND"); }
+    return snap(); },
+
+  ingest(d){ if(d.grid)gridClient=d.grid; }, interp(a,b,t){ const ps=[]; for(let i=0;i<4;i++){ const pa=a.ps[i],pb=b.ps[i];
+      ps.push(pb.ac?{ac:1,x:pa.x+(pb.x-pa.x)*t,z:pa.z+(pb.z-pa.z)*t,alive:pb.alive,wins:pb.wins,mb:pb.mb,rg:pb.rg}:{ac:0}); }
+    return {ph:b.ph,w:b.w,ps,bombs:b.bombs,flames:b.flames,pups:b.pups,grid:b.grid}; },
+
+  render(f,info){ const grid=info.isHost?G.grid:gridClient;
+    let ci=0; if(grid){ for(let k=0;k<GX*GZ;k++){ if(grid[k]===2){ if(ci<crateP.length){ const m=crateP[ci++]; m.visible=true; m.position.set(wc(k%GX),22,wc((k/GX)|0)); } } } }
+    for(;ci<crateP.length;ci++)crateP[ci].visible=false;
+    for(let i=0;i<4;i++){ const p=f.ps[i], g=gP[i]; if(!p.ac||!p.alive){ g.visible=false; continue; } g.visible=true; g.position.set(p.x,0,p.z); }
+    let bi=0; for(const b of f.bombs){ if(bi>=bombP.length)break; const m=bombP[bi++]; m.visible=true; m.position.set(wc(b.cx),20,wc(b.cz)); const pulse=0.9+Math.sin(performance.now()/90)*0.25; m.scale.setScalar(pulse); }
+    for(;bi<bombP.length;bi++)bombP[bi].visible=false;
+    let fi=0; for(const fl of f.flames){ if(fi>=flameP.length)break; const m=flameP[fi++]; m.visible=true; m.position.set(wc(fl.cx),20,wc(fl.cz)); m.material.opacity=0.4+Math.random()*0.4; }
+    for(;fi<flameP.length;fi++)flameP[fi].visible=false;
+    let ui=0; for(const u of f.pups){ if(ui>=pupP.length)break; const m=pupP[ui++]; m.visible=true; m.position.set(wc(u.cx),18+Math.sin(performance.now()/300)*3,wc(u.cz)); m.rotation.y+=0.05; m.material.color.set(u.k==="bomb"?"#ff6b6b":u.k==="range"?"#ffd166":"#5aff8a"); }
+    for(;ui<pupP.length;ui++)pupP[ui].visible=false;
+    const bar=document.getElementById("topBar"); let h="";
+    for(let i=0;i<4;i++){ const p=f.ps[i]; if(!p.ac)continue; h+='<span class="scp'+(i===info.myIdx?" me":"")+'" style="color:'+COLORS[i].css+';opacity:'+(p.alive?1:0.4)+'"><span class="dot" style="background:'+COLORS[i].css+'"></span>'+p.wins+'</span>'; }
+    h+='<span style="color:#8a93b8;font-size:12px">to '+WINROUNDS+'</span>'; bar.innerHTML=h;
+    const me=f.ps[info.myIdx]; document.getElementById("botHud").innerHTML='<div style="background:rgba(8,12,26,.7);border:1px solid #232b52;border-radius:12px;padding:8px 16px;font-weight:800;color:#cfd6ee">'+(me&&me.ac?("💣 ×"+me.mb+"  ⟷ "+me.rg+(me.alive?"":"  · DEAD")):"spectating")+'</div>';
+    R3.render(0.016); },
+  endText(f,myIdx){ return f.w===myIdx?"LAST ONE STANDING — YOU WIN!":(COLORS[f.w]?COLORS[f.w].name+" WINS THE YARD":"GAME OVER"); },
+};
+let gridClient=null;
+function snap(){ const s={ ph:G.ph,w:G.w,
+  ps:G.players.map(p=>p.active?{ac:1,x:Math.round(p.x),z:Math.round(p.z),alive:p.alive?1:0,wins:p.wins,mb:p.mb,rg:p.rg}:{ac:0}),
+  bombs:G.bombs.map(b=>({cx:b.cx,cz:b.cz})), flames:G.flames.map(f=>({cx:f.cx,cz:f.cz})), pups:G.pups.map(u=>({cx:u.cx,cz:u.cz,k:u.k})) };
+  s.grid=G.grid.slice(); return s; }
+function newRound(){ G.grid=new Array(GX*GZ).fill(0); G.bombs=[]; G.flames=[]; G.pups=[]; G.roundState="play";
+  const safe=new Set(); for(const[cx,cz]of CORNER){ safe.add(cx+","+cz); safe.add((cx+1)+","+cz); safe.add((cx-1)+","+cz); safe.add(cx+","+(cz+1)); safe.add(cx+","+(cz-1)); }
+  for(let cz=1;cz<GZ-1;cz++)for(let cx=1;cx<GX-1;cx++){ if(isSolidCell(cx,cz))continue; if(safe.has(cx+","+cz))continue; if(Math.random()<0.72)G.grid[cz*GX+cx]=2; }
+  for(let i=0;i<4;i++){ const p=G.players[i]; if(!p.active)continue; p.x=wc(CORNER[i][0]); p.z=wc(CORNER[i][1]); p.alive=true; } }
+function blastCells(b){ const out=[{cx:b.cx,cz:b.cz}]; for(const[dx,dz]of [[1,0],[-1,0],[0,1],[0,-1]]){ for(let s=1;s<=b.range;s++){ const cx=b.cx+dx*s,cz=b.cz+dz*s; if(!inb(cx,cz))break; const g=G.grid[cz*GX+cx]; if(g===1)break; out.push({cx,cz}); if(g===2)break; } } return out; }
+function dangerSet(){ const s=new Set(); for(const b of G.bombs){ for(const c of blastCells(b))s.add(c.cx+","+c.cz); } for(const f of G.flames)s.add(f.cx+","+f.cz); return s; }
+function blockCell(cx,cz){ if(!inb(cx,cz))return true; const g=G.grid[cz*GX+cx]; return g===1||g===2||isSolidCell(cx,cz); }
+function maybePup(cx,cz){ const r=Math.random(); if(r<0.16)G.pups.push({cx,cz,k:"bomb"}); else if(r<0.32)G.pups.push({cx,cz,k:"range"}); else if(r<0.42)G.pups.push({cx,cz,k:"speed"}); }
+function tryMove(p,dx,dz){ const r=PRAD;
+  if(dx!==0){ const nx=p.x+dx, edge=nx+Math.sign(dx)*r; if(!solidAt(edge,p.z-r+6)&&!solidAt(edge,p.z+r-6)&&!solidAt(edge,p.z))p.x=nx; }
+  if(dz!==0){ const nz=p.z+dz, edge=nz+Math.sign(dz)*r; if(!solidAt(p.x-r+6,edge)&&!solidAt(p.x+r-6,edge)&&!solidAt(p.x,edge))p.z=nz; }
+  p.x=Math.max(r,Math.min(W-r,p.x)); p.z=Math.max(r,Math.min(D-r,p.z)); }
+function solidAt(x,z){ const cx=Math.floor(x/CELL),cz=Math.floor(z/CELL); if(!inb(cx,cz))return true; if(isSolidCell(cx,cz))return true; return G.grid[cz*GX+cx]===2; }
+function shuffle(a){ a=a.slice(); for(let i=a.length-1;i>0;i--){ const j=(Math.random()*(i+1))|0; const t=a[i];a[i]=a[j];a[j]=t; } return a; }
+RanchNet.start(GAME);
+</script></body></html>
