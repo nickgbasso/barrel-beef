@@ -1,0 +1,806 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>BARREL BEEF — online tank duel</title>
+<style>
+  :root{
+    --cyan:#22e3ff; --mag:#ff3ea5; --bg:#0a0d18; --bg2:#11162a;
+    --ink:#e8ecff; --dim:#8a93b8;
+  }
+  *{box-sizing:border-box}
+  html,body{height:100%;margin:0}
+  body{
+    background:radial-gradient(120% 120% at 50% -10%, #161d3a 0%, var(--bg) 60%);
+    color:var(--ink);
+    font-family:"Segoe UI",system-ui,-apple-system,Roboto,Helvetica,Arial,sans-serif;
+    overflow:hidden;
+    -webkit-user-select:none;user-select:none;
+  }
+  canvas{display:block;width:100vw;height:100vh;position:fixed;inset:0;background:transparent;cursor:crosshair}
+  .hidden{display:none !important}
+
+  /* ---------- Overlay / menus ---------- */
+  #overlay{
+    position:fixed;inset:0;display:flex;align-items:center;justify-content:center;
+    background:rgba(6,9,18,.78);backdrop-filter:blur(4px);z-index:10;
+  }
+  .panel{
+    width:min(540px,92vw);background:linear-gradient(180deg,#141a33, #0d1226);
+    border:1px solid #2a335f;border-radius:18px;padding:30px 30px 26px;
+    box-shadow:0 30px 80px rgba(0,0,0,.6), inset 0 1px 0 rgba(255,255,255,.05);
+    text-align:center;
+  }
+  .logo{
+    font-weight:900;letter-spacing:2px;font-size:40px;line-height:1;margin:0 0 4px;
+    background:linear-gradient(90deg,var(--cyan),var(--mag));
+    -webkit-background-clip:text;background-clip:text;color:transparent;
+    text-shadow:0 0 30px rgba(34,227,255,.25);
+  }
+  .sub{color:var(--dim);font-size:13px;letter-spacing:3px;text-transform:uppercase;margin-bottom:22px}
+  .btn{
+    appearance:none;border:0;cursor:pointer;font-weight:800;letter-spacing:1px;
+    color:#06101c;border-radius:12px;padding:15px 18px;font-size:16px;width:100%;
+    background:linear-gradient(90deg,var(--cyan),#7bf0ff);
+    box-shadow:0 10px 30px rgba(34,227,255,.25);transition:transform .06s ease, filter .15s;
+    margin-top:10px;
+  }
+  .btn.alt{background:linear-gradient(90deg,var(--mag),#ff8ec8);box-shadow:0 10px 30px rgba(255,62,165,.25)}
+  .btn.ghost{background:#1b2244;color:var(--ink);box-shadow:none;border:1px solid #2c3768}
+  .btn:hover{filter:brightness(1.05)}
+  .btn:active{transform:translateY(1px) scale(.995)}
+  .row{display:flex;gap:10px}
+  .row .btn{margin-top:0}
+  input.code{
+    width:100%;margin-top:14px;background:#0a0f22;border:1px solid #2c3768;border-radius:12px;
+    color:var(--ink);font-size:24px;letter-spacing:8px;text-align:center;padding:14px;
+    text-transform:uppercase;font-weight:800;
+  }
+  input.code:focus{outline:none;border-color:var(--cyan)}
+  .hint{color:var(--dim);font-size:13px;line-height:1.5;margin-top:16px}
+  .codebox{
+    margin-top:16px;background:#0a0f22;border:1px dashed #34406f;border-radius:12px;padding:16px;
+  }
+  .codebig{font-size:46px;font-weight:900;letter-spacing:12px;color:var(--cyan);
+    text-shadow:0 0 24px rgba(34,227,255,.35)}
+  .small{font-size:12px;color:var(--dim);letter-spacing:1px}
+  .link{
+    margin-top:12px;display:flex;gap:8px;align-items:center;
+  }
+  .link input{flex:1;background:#0a0f22;border:1px solid #2c3768;border-radius:10px;color:var(--dim);
+    font-size:12px;padding:10px}
+  .copy{cursor:pointer;border:1px solid #2c3768;background:#161d3a;color:var(--ink);
+    border-radius:10px;padding:10px 14px;font-weight:700;font-size:12px}
+  .copy:hover{border-color:var(--cyan)}
+  .status{margin-top:18px;font-size:14px;color:var(--dim);min-height:20px}
+  .status b{color:var(--cyan)}
+  .err{color:#ff6b6b !important}
+  .keys{display:flex;gap:18px;justify-content:center;margin-top:18px;flex-wrap:wrap}
+  .keys div{font-size:12px;color:var(--dim)}
+  .keys b{color:var(--ink);background:#1a2143;border:1px solid #2c3768;border-radius:6px;padding:2px 7px;
+    font-family:ui-monospace,Consolas,monospace}
+  .spinner{width:22px;height:22px;border:3px solid #2c3768;border-top-color:var(--cyan);
+    border-radius:50%;display:inline-block;vertical-align:middle;animation:spin 0.8s linear infinite;margin-right:8px}
+  @keyframes spin{to{transform:rotate(360deg)}}
+  .footer{position:fixed;bottom:10px;left:0;right:0;text-align:center;color:#41496f;font-size:11px;z-index:5;letter-spacing:1px}
+
+  /* ---------- In-game HUD ---------- */
+  #hud{position:fixed;top:0;left:0;right:0;z-index:6;display:flex;justify-content:center;pointer-events:none}
+  #score{display:flex;align-items:center;gap:18px;margin-top:14px;background:rgba(8,12,26,.6);
+    border:1px solid #232b52;border-radius:14px;padding:10px 20px;backdrop-filter:blur(3px)}
+  .sc{font-weight:900;font-size:30px;min-width:46px;text-align:center}
+  .sc.you{color:var(--cyan)} .sc.foe{color:var(--mag)}
+  .vs{color:var(--dim);font-size:13px;letter-spacing:3px}
+  .ping{position:fixed;top:14px;right:16px;z-index:6;font-size:12px;color:var(--dim);
+    background:rgba(8,12,26,.6);border:1px solid #232b52;border-radius:8px;padding:6px 10px}
+  .toast{position:fixed;left:0;right:0;top:42%;text-align:center;z-index:7;pointer-events:none}
+  .toast span{font-weight:900;font-size:64px;letter-spacing:4px;
+    background:linear-gradient(90deg,var(--cyan),var(--mag));-webkit-background-clip:text;background-clip:text;color:transparent;
+    text-shadow:0 0 50px rgba(34,227,255,.3);opacity:0;transition:opacity .2s, transform .2s;display:inline-block}
+  .toast.show span{opacity:1;transform:scale(1.04)}
+</style>
+</head>
+<body>
+<canvas id="cv"></canvas>
+
+<!-- HUD -->
+<div id="hud" class="hidden">
+  <div id="score">
+    <div class="sc you" id="scYou">0</div>
+    <div class="vs">FIRST TO 10</div>
+    <div class="sc foe" id="scFoe">0</div>
+  </div>
+</div>
+<div class="ping hidden" id="ping">connecting…</div>
+<div class="toast" id="toast"><span id="toastTxt"></span></div>
+
+<!-- Menus -->
+<div id="overlay">
+  <!-- HOME -->
+  <div class="panel" id="screenHome">
+    <h1 class="logo">BARREL BEEF</h1>
+    <div class="sub">online tank duel · you + 1 friend</div>
+    <button class="btn" id="btnCreate">CREATE GAME</button>
+    <button class="btn alt" id="btnJoinScreen">JOIN A GAME</button>
+    <div class="keys">
+      <div><b>W A S D</b> move</div>
+      <div><b>MOUSE</b> aim</div>
+      <div><b>CLICK</b> / <b>SPACE</b> fire</div>
+      <div><b>SHIFT</b> dash</div>
+    </div>
+    <div class="hint">Bullets bounce off walls. One hit = one kill. Watch your own ricochets — they can frag you too.</div>
+  </div>
+
+  <!-- HOST WAITING -->
+  <div class="panel hidden" id="screenHost">
+    <h1 class="logo">YOUR ROOM</h1>
+    <div class="sub">send this to your friend</div>
+    <div class="codebox">
+      <div class="codebig" id="roomCode">····</div>
+      <div class="small">room code</div>
+    </div>
+    <div class="link">
+      <input id="shareLink" readonly value="" />
+      <button class="copy" id="copyLink">COPY LINK</button>
+    </div>
+    <div class="status" id="hostStatus"><span class="spinner"></span>waiting for your friend to join…</div>
+    <button class="btn ghost" id="hostBack" style="margin-top:18px">← back</button>
+  </div>
+
+  <!-- JOIN -->
+  <div class="panel hidden" id="screenJoin">
+    <h1 class="logo">JOIN GAME</h1>
+    <div class="sub">type the room code</div>
+    <input class="code" id="joinInput" maxlength="5" placeholder="CODE" autocomplete="off" />
+    <button class="btn alt" id="btnJoin" style="margin-top:14px">CONNECT</button>
+    <div class="status" id="joinStatus"></div>
+    <button class="btn ghost" id="joinBack" style="margin-top:14px">← back</button>
+  </div>
+
+  <!-- DISCONNECTED -->
+  <div class="panel hidden" id="screenDC">
+    <h1 class="logo">DISCONNECTED</h1>
+    <div class="sub" id="dcMsg">your opponent left the arena</div>
+    <button class="btn" id="dcHome" style="margin-top:20px">BACK TO MENU</button>
+  </div>
+</div>
+
+<div class="footer">peer-to-peer over WebRTC · no install · share the link & brawl</div>
+
+<script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
+<script>
+"use strict";
+/* =========================================================================
+   BARREL BEEF — host-authoritative real-time online tank duel.
+   Host (player 0) runs the whole simulation. Client (player 1) sends its
+   input and renders interpolated snapshots from the host. PeerJS handles
+   the WebRTC matchmaking through its free public broker — nobody runs a
+   server. Single file. Open the URL, share the link, fight.
+   ========================================================================= */
+
+/* ---------------- constants ---------------- */
+const W = 1280, H = 720;            // logical arena size
+const PR = 18;                       // player radius
+const BR = 5;                        // bullet radius
+const SPEED = 305;                   // player speed px/s
+const BSPEED = 660;                  // bullet speed px/s
+const FIRE_CD = 0.30;                // seconds between shots
+const BULLET_LIFE = 3.0;             // seconds
+const MAX_BOUNCE = 4;
+const MAX_BULLETS = 5;               // per player live at once
+const SELF_GRACE = 0.18;             // your own bullet can't hit you for this long
+const RESPAWN = 1.2;                 // seconds dead
+const INVULN = 1.3;                  // seconds of spawn protection
+const DASH_SPD = 2.7;                // dash speed multiplier
+const DASH_T = 0.16;                 // dash duration
+const DASH_CD = 1.4;                 // dash cooldown
+const WIN_SCORE = 10;
+const NET_HZ = 33;                   // ms between host state broadcasts
+const INTERP_MS = 95;                // client render delay for smoothing
+const NS = "barrelbeef26-";          // peer id namespace
+const CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+
+/* ---------------- arena obstacles (AABBs) ---------------- */
+const OBS = [
+  {x:W/2-18,  y:150,      w:36, h:H-300},          // central pillar bar
+  {x:230,     y:H/2-18,   w:200, h:36},            // left arm
+  {x:W-430,   y:H/2-18,   w:200, h:36},            // right arm
+  {x:W/2-150, y:H/2-150,  w:60,  h:60},            // floaters
+  {x:W/2+90,  y:H/2+90,   w:60,  h:60},
+];
+const SPAWNS = [ {x:120, y:H/2}, {x:W-120, y:H/2}, {x:W/2, y:90}, {x:W/2, y:H-90} ];
+
+/* ---------------- canvas ---------------- */
+const cv = document.getElementById("cv");
+const ctx = cv.getContext("2d");
+let view = {scale:1, ox:0, oy:0, dpr:1};
+function resize(){
+  const dpr = Math.min(window.devicePixelRatio||1, 2);
+  cv.width = Math.floor(innerWidth*dpr);
+  cv.height = Math.floor(innerHeight*dpr);
+  const scale = Math.min(innerWidth/W, innerHeight/H);
+  view = { scale: scale*dpr, ox:(innerWidth - W*scale)/2*dpr, oy:(innerHeight - H*scale)/2*dpr, dpr };
+}
+addEventListener("resize", resize); resize();
+function screenToWorld(sx, sy){
+  return { x:(sx*view.dpr - view.ox)/view.scale, y:(sy*view.dpr - view.oy)/view.scale };
+}
+
+/* ---------------- input ---------------- */
+const keys = {};
+let mouseScreen = {x:innerWidth/2, y:innerHeight/2};
+let shootHeld = false;
+addEventListener("keydown", e=>{
+  if(["ArrowUp","ArrowDown","ArrowLeft","ArrowRight"," "].includes(e.key)) e.preventDefault();
+  keys[e.code]=true;
+  if(e.code==="Space") shootHeld=true;
+});
+addEventListener("keyup", e=>{ keys[e.code]=false; if(e.code==="Space") shootHeld=false; });
+addEventListener("mousemove", e=>{ mouseScreen.x=e.clientX; mouseScreen.y=e.clientY; });
+addEventListener("mousedown", e=>{ if(e.button===0) shootHeld=true; });
+addEventListener("mouseup", e=>{ if(e.button===0) shootHeld=false; });
+addEventListener("blur", ()=>{ for(const k in keys) keys[k]=false; shootHeld=false; });
+function localInput(){
+  const w = screenToWorld(mouseScreen.x, mouseScreen.y);
+  return {
+    u: !!(keys.KeyW||keys.ArrowUp),
+    d: !!(keys.KeyS||keys.ArrowDown),
+    l: !!(keys.KeyA||keys.ArrowLeft),
+    r: !!(keys.KeyD||keys.ArrowRight),
+    sh: !!shootHeld,
+    da: !!(keys.ShiftLeft||keys.ShiftRight),
+    mx: w.x, my: w.y
+  };
+}
+
+/* =========================================================================
+   NETWORKING (PeerJS)
+   ========================================================================= */
+let peer=null, conn=null, isHost=false, connected=false;
+let lastInputFromClient = {u:0,d:0,l:0,r:0,sh:0,da:0,mx:W/2,my:H/2};
+let pingMs = 0, lastPingSent = 0;
+
+const ICE = { iceServers:[
+  {urls:"stun:stun.l.google.com:19302"},
+  {urls:"stun:stun1.l.google.com:19302"},
+  {urls:"turn:openrelay.metered.ca:80", username:"openrelayproject", credential:"openrelayproject"},
+  {urls:"turn:openrelay.metered.ca:443", username:"openrelayproject", credential:"openrelayproject"}
+]};
+
+function randCode(){
+  let s=""; for(let i=0;i<4;i++) s+=CODE_ALPHABET[Math.floor(Math.random()*CODE_ALPHABET.length)];
+  return s;
+}
+
+function newPeer(id){
+  return new Peer(id, { config:ICE, debug:1 });
+}
+
+/* ---- HOST ---- */
+function hostGame(attempt){
+  attempt = attempt||0;
+  isHost = true;
+  const code = randCode();
+  setHostCode(code);
+  peer = newPeer(NS+code);
+  peer.on("open", ()=>{ hostStatus.innerHTML = '<span class="spinner"></span>waiting for your friend to join…'; });
+  peer.on("error", err=>{
+    if((err.type==="unavailable-id") && attempt<6){ try{peer.destroy()}catch(e){}; hostGame(attempt+1); return; }
+    hostStatus.innerHTML = '<span class="err">network error: '+err.type+'. try again.</span>';
+  });
+  peer.on("connection", c=>{
+    if(conn){ try{c.close()}catch(e){} return; } // only one opponent
+    conn = c;
+    wireConn(c, /*hostSide*/true);
+  });
+}
+
+/* ---- JOIN ---- */
+function joinGame(code){
+  isHost = false;
+  joinStatus.innerHTML = '<span class="spinner"></span>connecting to room <b>'+code+'</b>…';
+  peer = newPeer(undefined);
+  let opened=false;
+  peer.on("open", ()=>{
+    const c = peer.connect(NS+code, { reliable:true, metadata:{game:"barrelbeef"} });
+    conn = c;
+    const failTimer = setTimeout(()=>{ if(!opened) joinStatus.innerHTML='<span class="err">no answer. check the code & that your friend clicked CREATE.</span>'; }, 9000);
+    c.on("open", ()=>{ opened=true; clearTimeout(failTimer); wireConn(c, /*hostSide*/false); });
+    c.on("error", ()=>{ joinStatus.innerHTML='<span class="err">couldn\'t reach that room.</span>'; });
+  });
+  peer.on("error", err=>{
+    if(err.type==="peer-unavailable"){ joinStatus.innerHTML='<span class="err">room not found. double-check the code.</span>'; }
+    else joinStatus.innerHTML='<span class="err">network error: '+err.type+'</span>';
+  });
+}
+
+function wireConn(c, hostSide){
+  c.on("data", onData);
+  c.on("close", onDisconnect);
+  c.on("error", onDisconnect);
+  connected = true;
+  startMatch(hostSide ? 0 : 1);
+}
+
+function onData(msg){
+  if(msg.t==="in"){                       // host receives client input
+    lastInputFromClient = msg;
+  } else if(msg.t==="state"){             // client receives snapshot
+    ingestState(msg);
+  } else if(msg.t==="ping"){
+    send({t:"pong", id:msg.id});
+  } else if(msg.t==="pong"){
+    if(msg.id===lastPingSent) pingMs = Math.round(performance.now()-pingT0);
+  } else if(msg.t==="rematch"){
+    G.scores=[0,0]; G.phase="play"; G.winner=-1; resetRound(); showToast("REMATCH!");
+  }
+}
+function send(o){ if(conn && conn.open){ try{conn.send(o)}catch(e){} } }
+
+let pingT0=0;
+function pingLoop(){
+  if(connected && conn && conn.open){
+    lastPingSent = (lastPingSent+1)%100000; pingT0=performance.now();
+    send({t:"ping", id:lastPingSent});
+  }
+}
+setInterval(pingLoop, 1500);
+
+function onDisconnect(){
+  if(!connected) return;
+  connected=false;
+  showScreen("screenDC");
+  document.getElementById("hud").classList.add("hidden");
+  document.getElementById("ping").classList.add("hidden");
+  overlay.classList.remove("hidden");
+  gameRunning=false;
+}
+
+/* =========================================================================
+   GAME STATE + SIMULATION (host authoritative)
+   ========================================================================= */
+let G = null;
+function freshGame(){
+  return {
+    phase:"play",                       // play | win
+    winner:-1,
+    scores:[0,0],
+    players:[ mkPlayer(0), mkPlayer(1) ],
+    bullets:[],
+    fireCd:[0,0],
+    dashCd:[0,0],
+  };
+}
+function mkPlayer(i){
+  const s = SPAWNS[i];
+  return { x:s.x, y:s.y, vx:0, vy:0, a:i===0?0:Math.PI, alive:true,
+           respawn:0, inv:INVULN, dashT:0 };
+}
+function resetRound(){
+  for(let i=0;i<2;i++){
+    const s = SPAWNS[i];
+    const p = G.players[i];
+    p.x=s.x; p.y=s.y; p.vx=0; p.vy=0; p.alive=true; p.respawn=0; p.inv=INVULN; p.dashT=0;
+  }
+  G.bullets.length=0;
+}
+
+/* ---- collision helpers ---- */
+function collideCircleAABB(px,py,r,b){
+  const cx = Math.max(b.x, Math.min(px, b.x+b.w));
+  const cy = Math.max(b.y, Math.min(py, b.y+b.h));
+  const dx = px-cx, dy = py-cy;
+  const d2 = dx*dx+dy*dy;
+  if(d2 >= r*r) return null;
+  const d = Math.sqrt(d2)||0.0001;
+  return { nx:dx/d, ny:dy/d, pen:r-d, cx, cy };
+}
+function resolvePlayerWalls(p){
+  // arena bounds
+  p.x = Math.max(PR, Math.min(W-PR, p.x));
+  p.y = Math.max(PR, Math.min(H-PR, p.y));
+  for(const b of OBS){
+    const c = collideCircleAABB(p.x,p.y,PR,b);
+    if(c){ p.x += c.nx*c.pen; p.y += c.ny*c.pen; }
+  }
+  p.x = Math.max(PR, Math.min(W-PR, p.x));
+  p.y = Math.max(PR, Math.min(H-PR, p.y));
+}
+function bounceBullet(bl){
+  let bounced=false;
+  // arena walls
+  if(bl.x<BR){ bl.x=BR; bl.vx=Math.abs(bl.vx); bounced=true; }
+  if(bl.x>W-BR){ bl.x=W-BR; bl.vx=-Math.abs(bl.vx); bounced=true; }
+  if(bl.y<BR){ bl.y=BR; bl.vy=Math.abs(bl.vy); bounced=true; }
+  if(bl.y>H-BR){ bl.y=H-BR; bl.vy=-Math.abs(bl.vy); bounced=true; }
+  // obstacles — reflect on smaller-overlap axis
+  for(const b of OBS){
+    const c = collideCircleAABB(bl.x,bl.y,BR,b);
+    if(c){
+      bl.x += c.nx*c.pen; bl.y += c.ny*c.pen;
+      if(Math.abs(c.nx) > Math.abs(c.ny)) bl.vx = Math.abs(bl.vx)*Math.sign(c.nx);
+      else bl.vy = Math.abs(bl.vy)*Math.sign(c.ny);
+      bounced=true;
+    }
+  }
+  if(bounced){ bl.bounces++; pew(180,0.04,"square",0.05); }
+  return bl.bounces<=MAX_BOUNCE;
+}
+
+function applyInput(i, inp, dt){
+  const p = G.players[i];
+  if(!p.alive) return;
+  // aim
+  p.a = Math.atan2(inp.my - p.y, inp.mx - p.x);
+  // move dir
+  let mx=(inp.r?1:0)-(inp.l?1:0), my=(inp.d?1:0)-(inp.u?1:0);
+  const ml=Math.hypot(mx,my)||1; mx/=ml; my/=ml;
+  const moving = (inp.l||inp.r||inp.u||inp.d);
+  // dash
+  if(inp.da && G.dashCd[i]<=0 && p.dashT<=0){
+    p.dashT = DASH_T; G.dashCd[i]=DASH_CD;
+    // dash toward movement, else toward aim
+    if(!moving){ mx=Math.cos(p.a); my=Math.sin(p.a); }
+    p.dashDir = {x:mx,y:my};
+    whoosh();
+  }
+  let spd = SPEED;
+  if(p.dashT>0){ spd = SPEED*DASH_SPD; mx=p.dashDir.x; my=p.dashDir.y; p.dashT-=dt; }
+  else if(!moving){ mx=0; my=0; }
+  p.x += mx*spd*dt; p.y += my*spd*dt;
+  resolvePlayerWalls(p);
+  // fire
+  G.fireCd[i]-=dt;
+  if(inp.sh && G.fireCd[i]<=0){
+    const live = G.bullets.filter(b=>b.owner===i).length;
+    if(live<MAX_BULLETS){
+      G.fireCd[i]=FIRE_CD;
+      G.bullets.push({
+        x:p.x+Math.cos(p.a)*(PR+8), y:p.y+Math.sin(p.a)*(PR+8),
+        vx:Math.cos(p.a)*BSPEED, vy:Math.sin(p.a)*BSPEED,
+        owner:i, life:BULLET_LIFE, bounces:0, age:0
+      });
+      pew(620,0.07,"square",0.06);
+    }
+  }
+}
+
+function stepHost(dt){
+  if(G.phase!=="play") return;
+  applyInput(0, hostLocalInput, dt);
+  applyInput(1, lastInputFromClient, dt);
+  // timers
+  for(let i=0;i<2;i++){
+    const p=G.players[i];
+    if(p.inv>0) p.inv-=dt;
+    if(G.dashCd[i]>0) G.dashCd[i]-=dt;
+    if(!p.alive){ p.respawn-=dt; if(p.respawn<=0) respawnPlayer(i); }
+  }
+  // bullets
+  for(let k=G.bullets.length-1;k>=0;k--){
+    const bl=G.bullets[k];
+    bl.x+=bl.vx*dt; bl.y+=bl.vy*dt; bl.life-=dt; bl.age+=dt;
+    if(bl.life<=0 || !bounceBullet(bl)){ G.bullets.splice(k,1); continue; }
+    // hit players
+    for(let i=0;i<2;i++){
+      const p=G.players[i];
+      if(!p.alive || p.inv>0) continue;
+      if(bl.owner===i && bl.age<SELF_GRACE) continue;
+      const dx=p.x-bl.x, dy=p.y-bl.y;
+      if(dx*dx+dy*dy < (PR+BR)*(PR+BR)){
+        killPlayer(i, bl.owner);
+        G.bullets.splice(k,1);
+        break;
+      }
+    }
+  }
+}
+function respawnPlayer(i){
+  const p=G.players[i];
+  // spawn far from opponent
+  const foe=G.players[1-i];
+  let best=SPAWNS[0],bd=-1;
+  for(const s of SPAWNS){ const d=(s.x-foe.x)**2+(s.y-foe.y)**2; if(d>bd){bd=d;best=s;} }
+  p.x=best.x; p.y=best.y; p.vx=0; p.vy=0; p.alive=true; p.inv=INVULN; p.dashT=0;
+}
+function killPlayer(victim, shooter){
+  const p=G.players[victim];
+  p.alive=false; p.respawn=RESPAWN;
+  const scorer = (shooter===victim) ? (1-victim) : shooter; // self-frag credits the foe
+  G.scores[scorer]++;
+  if(G.scores[scorer]>=WIN_SCORE){ G.phase="win"; G.winner=scorer; }
+}
+
+/* ---- snapshot serialize / ingest ---- */
+function serializeState(){
+  return {
+    t:"state",
+    ps:G.players.map(p=>({x:Math.round(p.x),y:Math.round(p.y),a:+p.a.toFixed(3),
+                          al:p.alive?1:0, iv:p.inv>0?1:0})),
+    bs:G.bullets.map(b=>({x:Math.round(b.x),y:Math.round(b.y),o:b.owner})),
+    sc:G.scores, ph:G.phase, w:G.winner
+  };
+}
+const snap = { prev:null, cur:null };
+function ingestState(s){
+  s.rt = performance.now();
+  snap.prev = snap.cur; snap.cur = s;
+  // sync authoritative bits for HUD/win
+  G.scores = s.sc; G.phase = s.ph; G.winner = s.w;
+}
+
+/* =========================================================================
+   PRESENTATION — shared draw + FX detection (host & client)
+   ========================================================================= */
+const particles=[];
+let lastSeen = { sc:[0,0], al:[1,1], ph:"play", w:-1 };
+function present(frame){
+  // frame: {ps:[{x,y,a,al,iv}], bs:[{x,y,o}], sc, ph, w}
+  // FX detection
+  for(let i=0;i<2;i++){
+    if(frame.ps[i].al===0 && lastSeen.al[i]===1){
+      boom(frame.ps[i].x, frame.ps[i].y, i===0?"#22e3ff":"#ff3ea5");
+    }
+  }
+  if(frame.sc[0]!==lastSeen.sc[0] || frame.sc[1]!==lastSeen.sc[1]){
+    document.getElementById("scYou").textContent = frame.sc[myIdx];
+    document.getElementById("scFoe").textContent = frame.sc[1-myIdx];
+  }
+  if(frame.ph==="win" && lastSeen.ph!=="win"){
+    showToast(frame.w===myIdx ? "YOU WIN!" : "YOU LOSE");
+    setTimeout(()=>{ if(G && G.phase==="win"){ showToast("CLICK / SPACE TO REMATCH", true); } }, 1600);
+  }
+  lastSeen = { sc:[frame.sc[0],frame.sc[1]], al:[frame.ps[0].al,frame.ps[1].al], ph:frame.ph, w:frame.w };
+  draw(frame);
+}
+
+function boom(x,y,color){
+  for(let i=0;i<26;i++){
+    const a=Math.random()*Math.PI*2, sp=60+Math.random()*260;
+    particles.push({x,y,vx:Math.cos(a)*sp,vy:Math.sin(a)*sp,life:0.5+Math.random()*0.4,age:0,color});
+  }
+  shake=12; boomSound();
+}
+let shake=0;
+
+function draw(frame){
+  ctx.setTransform(1,0,0,1,0,0);
+  ctx.clearRect(0,0,cv.width,cv.height);
+  // shake
+  let sx=0,sy=0;
+  if(shake>0){ sx=(Math.random()*2-1)*shake; sy=(Math.random()*2-1)*shake; shake*=0.86; if(shake<0.4)shake=0; }
+  ctx.setTransform(view.scale,0,0,view.scale, view.ox+sx*view.dpr, view.oy+sy*view.dpr);
+
+  // arena floor
+  ctx.fillStyle="#0c1124"; ctx.fillRect(0,0,W,H);
+  // grid
+  ctx.strokeStyle="rgba(40,52,96,.5)"; ctx.lineWidth=1;
+  ctx.beginPath();
+  for(let x=0;x<=W;x+=40){ ctx.moveTo(x,0); ctx.lineTo(x,H); }
+  for(let y=0;y<=H;y+=40){ ctx.moveTo(0,y); ctx.lineTo(W,y); }
+  ctx.stroke();
+  // border
+  ctx.strokeStyle="#2c3768"; ctx.lineWidth=4; ctx.strokeRect(2,2,W-4,H-4);
+  // obstacles
+  for(const b of OBS){
+    ctx.fillStyle="#1a2348";
+    roundRect(b.x,b.y,b.w,b.h,6); ctx.fill();
+    ctx.strokeStyle="#33407a"; ctx.lineWidth=2; ctx.stroke();
+  }
+
+  // bullets
+  for(const bl of frame.bs){
+    const col = bl.o===0 ? "#22e3ff" : "#ff3ea5";
+    ctx.save(); ctx.shadowBlur=14; ctx.shadowColor=col; ctx.fillStyle="#fff";
+    ctx.beginPath(); ctx.arc(bl.x,bl.y,BR,0,7); ctx.fill();
+    ctx.fillStyle=col; ctx.globalAlpha=.6;
+    ctx.beginPath(); ctx.arc(bl.x,bl.y,BR+3,0,7); ctx.fill();
+    ctx.restore();
+  }
+
+  // players
+  for(let i=0;i<2;i++){
+    const p=frame.ps[i]; if(p.al===0) continue;
+    const col = i===0 ? "#22e3ff" : "#ff3ea5";
+    const isMe = (i===myIdx);
+    ctx.save();
+    ctx.translate(p.x,p.y); ctx.rotate(p.a);
+    // invuln blink
+    const blink = (p.iv===1) ? (Math.floor(performance.now()/100)%2?0.35:0.85) : 1;
+    ctx.globalAlpha=blink;
+    // barrel
+    ctx.fillStyle=col; roundRectC(PR-4, -5, 22, 10, 4); ctx.fill();
+    // body
+    ctx.shadowBlur=18; ctx.shadowColor=col;
+    ctx.fillStyle="#0c1124"; ctx.beginPath(); ctx.arc(0,0,PR,0,7); ctx.fill();
+    ctx.lineWidth=4; ctx.strokeStyle=col; ctx.beginPath(); ctx.arc(0,0,PR,0,7); ctx.stroke();
+    ctx.shadowBlur=0;
+    ctx.fillStyle=col; ctx.beginPath(); ctx.arc(0,0,PR*0.42,0,7); ctx.fill();
+    ctx.restore();
+    // name tag for "YOU"
+    if(isMe){
+      ctx.globalAlpha=.9; ctx.fillStyle=col; ctx.font="bold 13px Segoe UI,sans-serif";
+      ctx.textAlign="center"; ctx.fillText("YOU", p.x, p.y-PR-10); ctx.globalAlpha=1;
+    }
+  }
+
+  // particles
+  for(let k=particles.length-1;k>=0;k--){
+    const pt=particles[k]; pt.age+=fdt; if(pt.age>=pt.life){ particles.splice(k,1); continue; }
+    pt.x+=pt.vx*fdt; pt.y+=pt.vy*fdt; pt.vx*=0.92; pt.vy*=0.92;
+    const a=1-pt.age/pt.life;
+    ctx.globalAlpha=a; ctx.fillStyle=pt.color;
+    ctx.beginPath(); ctx.arc(pt.x,pt.y,3*a+1,0,7); ctx.fill();
+  }
+  ctx.globalAlpha=1;
+}
+function roundRect(x,y,w,h,r){ ctx.beginPath();
+  ctx.moveTo(x+r,y); ctx.arcTo(x+w,y,x+w,y+h,r); ctx.arcTo(x+w,y+h,x,y+h,r);
+  ctx.arcTo(x,y+h,x,y,r); ctx.arcTo(x,y,x+w,y,r); ctx.closePath(); }
+function roundRectC(x,y,w,h,r){ roundRect(x,y,w,h,r); }
+
+/* =========================================================================
+   MAIN LOOP
+   ========================================================================= */
+let myIdx=0, gameRunning=false, last=0, fdt=0, netAcc=0, hostLocalInput=null;
+function loop(ts){
+  if(!gameRunning) return;
+  const dt = Math.min(0.05, (ts-last)/1000) || 0; last=ts; fdt=dt;
+  if(isHost){
+    hostLocalInput = localInput();
+    stepHost(dt);
+    netAcc += dt*1000;
+    if(netAcc>=NET_HZ){ netAcc=0; send(serializeState()); }
+    // host presents straight from sim
+    present(serializeState());
+  } else {
+    // client: send input, render interpolated
+    send(Object.assign({t:"in"}, localInput()));
+    const frame = interpFrame();
+    if(frame) present(frame);
+    // rematch trigger
+  }
+  // rematch on win (either side can press)
+  if(G && G.phase==="win" && (shootHeld)){
+    if(isHost){ G.scores=[0,0]; G.phase="play"; G.winner=-1; resetRound(); showToast("REMATCH!"); send({t:"rematch"}); }
+    else { send({t:"rematch"}); }
+    shootHeld=false;
+  }
+  // ping label
+  document.getElementById("ping").textContent = (pingMs?("ping "+pingMs+"ms"):"connected") + (isHost?" · host":" · guest");
+  requestAnimationFrame(loop);
+}
+
+function interpFrame(){
+  const a=snap.prev, b=snap.cur;
+  if(!b) return null;
+  if(!a) return b;
+  const rt = performance.now() - INTERP_MS;
+  let t = (rt - a.rt)/((b.rt - a.rt)||1);
+  t = Math.max(0, Math.min(1, t));
+  const ps=[];
+  for(let i=0;i<2;i++){
+    const pa=a.ps[i], pb=b.ps[i];
+    ps.push({
+      x:pa.x+(pb.x-pa.x)*t,
+      y:pa.y+(pb.y-pa.y)*t,
+      a:lerpAngle(pa.a,pb.a,t),
+      al:pb.al, iv:pb.iv
+    });
+  }
+  return { ps, bs:b.bs, sc:b.sc, ph:b.ph, w:b.w };
+}
+function lerpAngle(a,b,t){
+  let d=b-a; while(d>Math.PI)d-=2*Math.PI; while(d<-Math.PI)d+=2*Math.PI; return a+d*t;
+}
+
+function startMatch(idx){
+  myIdx = idx;
+  G = freshGame();
+  snap.prev=snap.cur=null;
+  lastSeen={sc:[0,0],al:[1,1],ph:"play",w:-1};
+  document.getElementById("scYou").textContent="0";
+  document.getElementById("scFoe").textContent="0";
+  overlay.classList.add("hidden");
+  document.getElementById("hud").classList.remove("hidden");
+  document.getElementById("ping").classList.remove("hidden");
+  gameRunning=true; last=performance.now();
+  showToast(idx===0?"FIGHT!":"FIGHT!");
+  requestAnimationFrame(loop);
+}
+
+/* =========================================================================
+   SOUND (tiny WebAudio, no files)
+   ========================================================================= */
+let actx=null;
+function AC(){ if(!actx){ try{actx=new (window.AudioContext||window.webkitAudioContext)();}catch(e){} } return actx; }
+function pew(freq,dur,type,vol){
+  const a=AC(); if(!a) return;
+  const o=a.createOscillator(), g=a.createGain();
+  o.type=type||"square"; o.frequency.setValueAtTime(freq,a.currentTime);
+  o.frequency.exponentialRampToValueAtTime(Math.max(60,freq*0.4),a.currentTime+dur);
+  g.gain.setValueAtTime(vol||0.05,a.currentTime); g.gain.exponentialRampToValueAtTime(0.0001,a.currentTime+dur);
+  o.connect(g).connect(a.destination); o.start(); o.stop(a.currentTime+dur);
+}
+function whoosh(){ pew(300,0.12,"sawtooth",0.04); }
+function boomSound(){
+  const a=AC(); if(!a) return;
+  const o=a.createOscillator(), g=a.createGain();
+  o.type="sawtooth"; o.frequency.setValueAtTime(140,a.currentTime);
+  o.frequency.exponentialRampToValueAtTime(40,a.currentTime+0.35);
+  g.gain.setValueAtTime(0.14,a.currentTime); g.gain.exponentialRampToValueAtTime(0.0001,a.currentTime+0.35);
+  o.connect(g).connect(a.destination); o.start(); o.stop(a.currentTime+0.35);
+}
+
+/* =========================================================================
+   UI WIRING
+   ========================================================================= */
+const overlay=document.getElementById("overlay");
+const screens=["screenHome","screenHost","screenJoin","screenDC"];
+function showScreen(id){ screens.forEach(s=>document.getElementById(s).classList.toggle("hidden", s!==id)); }
+const hostStatus=document.getElementById("hostStatus");
+const joinStatus=document.getElementById("joinStatus");
+
+function setHostCode(code){
+  document.getElementById("roomCode").textContent=code;
+  const url = location.origin+location.pathname+"?room="+code;
+  document.getElementById("shareLink").value=url;
+}
+
+document.getElementById("btnCreate").onclick=()=>{ AC(); showScreen("screenHost"); hostGame(); };
+document.getElementById("btnJoinScreen").onclick=()=>{ AC(); showScreen("screenJoin"); document.getElementById("joinInput").focus(); };
+document.getElementById("hostBack").onclick=()=>{ cleanup(); showScreen("screenHome"); };
+document.getElementById("joinBack").onclick=()=>{ cleanup(); showScreen("screenHome"); };
+document.getElementById("dcHome").onclick=()=>{ cleanup(); showScreen("screenHome"); };
+document.getElementById("btnJoin").onclick=()=>doJoin();
+document.getElementById("joinInput").addEventListener("keydown",e=>{ if(e.key==="Enter") doJoin(); });
+function doJoin(){
+  const code=document.getElementById("joinInput").value.trim().toUpperCase();
+  if(code.length<4){ joinStatus.innerHTML='<span class="err">enter the 4-character code.</span>'; return; }
+  AC(); joinGame(code);
+}
+document.getElementById("copyLink").onclick=()=>{
+  const inp=document.getElementById("shareLink");
+  inp.select(); inp.setSelectionRange(0,999);
+  navigator.clipboard?.writeText(inp.value).then(()=>{
+    const b=document.getElementById("copyLink"); b.textContent="COPIED!"; setTimeout(()=>b.textContent="COPY LINK",1400);
+  }).catch(()=>{ document.execCommand("copy"); });
+};
+
+function cleanup(){
+  gameRunning=false; connected=false;
+  try{ if(conn) conn.close(); }catch(e){}
+  try{ if(peer) peer.destroy(); }catch(e){}
+  conn=null; peer=null;
+  document.getElementById("hud").classList.add("hidden");
+  document.getElementById("ping").classList.add("hidden");
+}
+
+/* toast banner */
+let toastTimer=null;
+function showToast(text, sticky){
+  const t=document.getElementById("toast"), s=document.getElementById("toastTxt");
+  s.textContent=text; t.classList.add("show");
+  clearTimeout(toastTimer);
+  if(!sticky) toastTimer=setTimeout(()=>t.classList.remove("show"),1300);
+}
+// hide toast when match resumes after win->rematch
+setInterval(()=>{ if(G && G.phase==="play"){ const t=document.getElementById("toast");
+  if(t.classList.contains("show") && document.getElementById("toastTxt").textContent.indexOf("REMATCH")<0
+     && document.getElementById("toastTxt").textContent.indexOf("FIGHT")<0){ } } }, 500);
+
+/* auto-join from ?room=CODE link */
+(function(){
+  const p=new URLSearchParams(location.search);
+  const room=p.get("room");
+  if(room){
+    showScreen("screenJoin");
+    const inp=document.getElementById("joinInput");
+    inp.value=room.toUpperCase();
+    joinStatus.innerHTML='your friend\'s room is ready — hit <b>CONNECT</b>';
+  }
+})();
+</script>
+</body>
+</html>
